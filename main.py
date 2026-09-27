@@ -648,6 +648,8 @@ class MainWindow(QMainWindow):
 
     def apply_breakpoints(self):
         """Adapt to the window width (logical px): wide, compact, narrow."""
+        if not hasattr(self, "detail"):     # resize before the UI is built
+            return
         width = self.width()
         compact, narrow = width < COMPACT_WIDTH, width < NARROW_WIDTH
         if narrow != self._narrow:          # only on crossing, so the ☰ button still works
