@@ -9,7 +9,7 @@ from data_manager import (
     match_census_profile,
 )
 from pipeline import compute_zone
-from weather import get_tmax_normals, get_weather
+from weather import get_model_bias, get_tmax_normals, get_weather
 
 NAME_KEYS = ("district", "District", "DISTRICT", "NAME_2", "name", "NAME")
 
@@ -39,6 +39,7 @@ def compute_all(locations, demographics, capacities, force=False, replay=None):
     """
     data, info = get_weather(locations, force=force, replay=replay)
     normals = get_tmax_normals(locations)
+    bias = get_model_bias(locations)
     info["normals"] = len(normals)
     results = {}
     for name, _, _ in locations:
@@ -46,7 +47,7 @@ def compute_all(locations, demographics, capacities, force=False, replay=None):
             try:
                 results[name] = compute_zone(
                     name, data[name], demographics.get(name, {}),
-                    capacities.get(name.lower()), normals.get(name), replay,
+                    capacities.get(name.lower()), normals.get(name), replay, bias.get(name),
                 )
             except Exception as exc:          # one bad district must not break the rest
                 info.setdefault("zone_errors", {})[name] = str(exc)

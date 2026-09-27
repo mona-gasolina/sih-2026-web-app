@@ -18,6 +18,13 @@ Rule (prototype):
     apart are usually the same forecast and would not be a real confirmation.
   • One update not at risk resets the streak; so does a gap longer than
     MAX_UPDATE_GAP_HOURS (the updates were not consecutive).
+  • Second opinion: the same IMD test is run on three independent weather
+    models (ECMWF, GFS, ICON, each bias-corrected). At least
+    ENSEMBLE_MIN_AGREE of them must back the main forecast; otherwise the
+    district stays on WATCH ("low confidence") and nothing is sent.
+  • No repeats: a district is not messaged again within RESEND_HOURS for the
+    same or a lower colour, even if the heat wave flickers off and on. A
+    worse colour (YELLOW → ORANGE → RED) is sent straight away as an upgrade.
   • Replay (archived weather) shows the levels but never sends or stores anything.
 
 Dispatch: Twilio REST API when these environment variables are set –
@@ -34,12 +41,13 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 
-from config import ALERT_STATE_FILE, ALERT_LOG_FILE, DATA_DIR
+from config import ALERT_STATE_FILE, ALERT_LOG_FILE, DATA_DIR, ENSEMBLE_MIN_AGREE
 from heatwave import code_index
 
 CONFIRM_UPDATES = 2
 MIN_UPDATE_GAP_HOURS = 6
 MAX_UPDATE_GAP_HOURS = 36
+RESEND_HOURS = 48
 
 
 def _load_state():
@@ -73,32 +81,42 @@ def evaluate(zone_metrics, weather_info):
     for name, m in zone_metrics.items():
         imd = m.get("imd") or {}
         risky = imd.get("code", "GREEN") != "GREEN"
+        ens = m.get("ensemble") or {}
+        have_models = ens.get("total", 0) >= 2
+        agreed = ens.get("agree", 0) >= ENSEMBLE_MIN_AGREE if have_models else True
+        alertable = risky and agreed
         entry = state.get(name, {"streak": 0, "last_update": 0, "dispatched": False})
 
         if persist and weather_info.get("fresh") and entry.get("last_update") != fetched_at:
             gap_hours = (fetched_at - entry.get("last_update", 0)) / 3600.0
-            if not risky:
+            if not alertable:
                 entry.update(streak=0, last_update=fetched_at, dispatched=False)
             elif entry.get("streak", 0) == 0 or gap_hours > MAX_UPDATE_GAP_HOURS:
                 entry.update(streak=1, last_update=fetched_at, dispatched=False)
             elif gap_hours >= MIN_UPDATE_GAP_HOURS:
                 entry.update(streak=entry["streak"] + 1, last_update=fetched_at)
             # else: same model run downloaded again – not a new update
-        streak = entry.get("streak", 0) if persist else (1 if risky else 0)
-        if persist and risky and streak == 0:
+        streak = entry.get("streak", 0) if persist else (1 if alertable else 0)
+        if persist and alertable and streak == 0:
             streak = 1          # first time we see it (e.g. loaded from cache)
+        models_text = (f"backed by {ens['agree']} of {ens['total']} other weather models" if have_models
+                       else "other weather models unavailable – main forecast only")
 
         if risky:
-            if replay:
+            if not agreed:
+                level = "WATCH"
+                confidence = (f"Low confidence – none of the {ens['total']} other weather models "
+                              "show this heat wave, so it isn't escalated")
+            elif replay:
                 level, confidence = "WARNING", "Replay of archived weather – shown as confirmed, nothing is sent"
             elif streak >= CONFIRM_UPDATES:
                 level = "WARNING"
                 confidence = (f"Confirmed in {streak} consecutive forecast updates "
-                              f"(≥ {MIN_UPDATE_GAP_HOURS} h apart)")
+                              f"(≥ {MIN_UPDATE_GAP_HOURS} h apart); {models_text}")
             else:
                 level = "WATCH"
-                confidence = (f"Seen in 1 forecast update – confirmed if the next update "
-                              f"(≥ {MIN_UPDATE_GAP_HOURS} h later) agrees")
+                confidence = (f"Seen in 1 forecast update ({models_text}) – confirmed if the next "
+                              f"update (≥ {MIN_UPDATE_GAP_HOURS} h later) agrees")
             peak = imd["peak_day"]
             alert = {
                 "district": name,
@@ -113,18 +131,30 @@ def evaluate(zone_metrics, weather_info):
                 "hours_danger": peak["hours_danger"],
                 "score": m.get("risk_score", 0),
                 "streak": streak,
+                "models": f"{ens.get('agree', 0)}/{ens.get('total', 0)}" if have_models else "",
                 "confidence": confidence,
             }
             alerts.append(alert)
-            if level == "WARNING" and persist and not entry.get("dispatched"):
+            if level == "WARNING" and persist and _should_send(entry, imd["code"], fetched_at):
+                if entry.get("dispatched"):
+                    alert["upgrade"] = True
                 newly_confirmed.append(alert)
-                entry["dispatched"] = True
+                entry.update(dispatched=True, sent_code=imd["code"], sent_at=fetched_at)
         state[name] = entry
 
     if persist:
         _save_state(state)
     alerts.sort(key=lambda a: (a["level"] != "WARNING", -code_index(a["colour"]), -a["score"]))
     return alerts, newly_confirmed
+
+
+def _should_send(entry, code, now):
+    """Send once per heat wave; again only if it gets worse, or after RESEND_HOURS."""
+    worse = code_index(code) > code_index(entry.get("sent_code", "GREEN"))
+    if entry.get("dispatched"):
+        return worse                                   # already told: only upgrades
+    recent = now - entry.get("sent_at", 0) < RESEND_HOURS * 3600
+    return worse or not recent                         # flicker off/on within 48 h: stay quiet
 
 
 HIGH_STRESS_BANDS = ("HIGH", "EXTREME")
@@ -168,18 +198,20 @@ def gateway_status():
 
 
 def compose_message(alert, actions):
+    """Short SMS in plain words, e.g.
+    HEAT WARNING, Madurai: red alert from Tue 30 Apr. Up to 44°C, 7°C above normal;
+    feels like 48°C in the sun. Activate the Heat Action Plan. – Heat Intelligence"""
     first_action = actions[0] if actions else ""
+    colour = alert.get("colour")
     if alert.get("tmax") is not None:
         dep = alert.get("departure")
-        dep_text = f" ({dep:+.1f}°C vs normal)" if dep is not None else ""
-        what = f"{alert['risk']} from {alert['day']}. Max {alert['tmax']:.0f}°C{dep_text}"
+        above = f", {dep:.0f}°C above normal" if dep is not None and dep > 0 else ""
+        what = f"{colour.lower()} alert from {alert['day']}. Up to {alert['tmax']:.0f}°C{above}"
     else:
-        what = f"{alert['risk']} heat stress on {alert['day']}"
-    return (
-        f"HEAT {alert['level']} – {alert['district']}: {what}. Peak {alert['model']} "
-        f"{alert['stress']:.0f}°C in sun, {alert['hours_danger']} h in danger range. "
-        f"{first_action} – Heat Intelligence"
-    )
+        what = f"{alert['risk'].lower()} heat stress {alert['day'].lower()}"
+    heading = "HEAT WARNING UPDATE" if alert.get("upgrade") else f"HEAT {alert['level']}"
+    return (f"{heading}, {alert['district']}: {what}; feels like {alert['stress']:.0f}°C in the sun. "
+            f"{first_action} – Heat Intelligence")
 
 
 def _mask(number):
@@ -213,34 +245,43 @@ def dispatch(alert, recipients, actions):
     results = []
     targets = [r for r in recipients if r.get("mobile")]
     if not targets:
-        results.append(("No officer with a mobile number is assigned to this district", "—",
-                        "NOT SENT – logged only"))
+        results.append(("No officer assigned", "", "Not sent"))
     for r in targets:
         label = f"{r.get('full_name') or r['username']} ({_mask(r['mobile'])})"
         if not channels:
-            results.append((label, "SMS", "LOGGED – gateway not configured"))
+            results.append((label, "SMS", "Not sent – SMS not set up"))
             continue
         for channel in channels:
             try:
                 _twilio_send(r["mobile"], body, whatsapp=(channel == "WhatsApp"))
-                results.append((label, channel, "SENT"))
+                results.append((label, channel, "Sent"))
             except Exception as exc:
-                results.append((label, channel, f"FAILED: {exc}"))
+                results.append((label, channel, f"Failed: {exc}"))
     _log(alert, body, results)
     return results
 
 
+LOG_COLUMNS = ["timestamp", "district", "level", "code", "heat_from", "recipient", "channel", "status", "message"]
+
+
 def _log(alert, body, results):
+    """timestamp = when the alert was logged; heat_from = first forecast heat-wave day."""
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
+        if ALERT_LOG_FILE.exists():
+            with open(ALERT_LOG_FILE, "r", encoding="utf-8") as f:
+                header = f.readline().strip().split(",")
+            if header != LOG_COLUMNS:          # older format: keep it, start a fresh log
+                ALERT_LOG_FILE.replace(ALERT_LOG_FILE.with_name("alert_log_old.csv"))
         new = not ALERT_LOG_FILE.exists()
         with open(ALERT_LOG_FILE, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             if new:
-                writer.writerow(["timestamp", "district", "level", "risk", "recipient", "channel", "status", "message"])
+                writer.writerow(LOG_COLUMNS)
             for label, channel, status in results:
                 writer.writerow([datetime.now().isoformat(timespec="seconds"), alert["district"],
-                                 alert["level"], alert["risk"], label, channel, status, body])
+                                 alert["level"], alert.get("colour", ""), alert.get("day", ""),
+                                 label, channel, status, body])
     except Exception:
         pass
 
@@ -249,6 +290,8 @@ def read_log(limit=50):
     try:
         with open(ALERT_LOG_FILE, "r", encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
+        if rows and "heat_from" not in rows[0]:
+            return []                          # older format (before the heat-from column)
         return rows[-limit:][::-1]
     except Exception:
         return []

@@ -33,20 +33,22 @@ def _longest_run(bands):
     return best
 
 
-def compute_zone(name, data, demographic, capacity=None, normals=None, replay=None):
+def compute_zone(name, data, demographic, capacity=None, normals=None, replay=None, bias=None):
     """
     data: normalised weather for one district (weather.normalize output)
     normals: 365 daily Tmax normals for the district (weather.get_tmax_normals)
     replay: start date (YYYY-MM-DD) when replaying archived weather, else None
+    bias: {model: [365 offsets]} for the model-agreement check (weather.get_model_bias)
     Returns the full metrics dict for that district.
     """
     kind = heatwave.terrain(name)
+    lat, lon = data.get("lat"), data.get("lon")
     today = replay or datetime.now().strftime("%Y-%m-%d")
     days = [d for d in data["days"] if d["date"] >= today][:5] or data["days"][:5]
 
     forecast = []
     for i, day in enumerate(days):
-        summary = summarise_day(day["hours"])
+        summary = summarise_day(day["hours"], lat, lon)
         if summary is None:
             continue
         summary.update({"date": day["date"], "date_text": _date_text(day["date"], i, relative=not replay)})
@@ -58,7 +60,7 @@ def compute_zone(name, data, demographic, capacity=None, normals=None, replay=No
 
     today_summary = forecast[0] if forecast else None
     current = data["current"]
-    now = calculate_current(current, today_summary["hours_danger"] if today_summary else 0)
+    now = calculate_current(current, today_summary["hours_danger"] if today_summary else 0, lat, lon)
 
     thermal_score = today_summary["thermal_score"] if today_summary else now["thermal_score"]
     risk = today_summary["risk"] if today_summary else now["risk"]
@@ -80,6 +82,8 @@ def compute_zone(name, data, demographic, capacity=None, normals=None, replay=No
         "humidity": current["humidity"],
         "wind": current["wind"],
         "solar": current["solar"],
+        "cloud": current.get("cloud"),
+        "ground_temp": current.get("ground_temp"),
         "observed_at": current.get("time", ""),
         "stress": now["stress"],
         "stress_shade": now["stress_shade"],
@@ -102,6 +106,7 @@ def compute_zone(name, data, demographic, capacity=None, normals=None, replay=No
         "terrain": kind,
         "has_normals": bool(normals),
         "imd": heatwave.district_code(forecast),
+        "ensemble": heatwave.ensemble_check(forecast, data.get("model_tmax"), normals, bias, kind),
     }
 
 
@@ -115,4 +120,5 @@ def placeholder_metrics(demographic):
         "forecast": [], "days_high": 0, "longest_high_run": 0, "peak_band": "—",
         "priority": 0.0, "capacity": None, "demographic": demographic,
         "terrain": "", "has_normals": False, "imd": heatwave.district_code([]),
+        "ensemble": {"codes": {}, "tmax": {}, "agree": 0, "total": 0},
     }

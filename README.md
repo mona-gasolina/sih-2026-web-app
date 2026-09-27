@@ -32,12 +32,12 @@ A modular PyQt5 prototype for SIH 2026 Problem Statement 26083:
 
 | Idea submission | Where it is in the app |
 |---|---|
-| Human Thermal Stress Index from temperature, humidity, wind, radiation | `thermal.py` – UTCI via pythermalcomfort, hour by hour |
+| Human Thermal Stress Index from temperature, humidity, wind, radiation | `thermal.py` – UTCI via pythermalcomfort, hour by hour; radiation from direct sun, diffuse light, clouds and ground heat (ERA5-HEAT method) |
 | Rule-based risk classifier + 3–5 day forecaster | `heatwave.py` – IMD heat-wave criteria, YELLOW / ORANGE / RED; `thermal.py` – UTCI stress bands VERY LOW → EXTREME |
 | Heat exposure duration modelling | Hours per day in the danger range count towards the thermal score |
 | Relative risk score with demographic vulnerability | 70 % thermal score + 30 % Census 2011 population exposure |
 | GIS dashboard with drill-down and forecast trends | Map, hover card, right panel, 5-day trend chart |
-| Persistent / confidence-based alerting | `alerts.py` – IMD YELLOW+ heat wave: WATCH after 1 update, WARNING after 2 consecutive updates at least 6 h apart |
+| Persistent / confidence-based alerting | `alerts.py` – IMD YELLOW+ heat wave: WATCH after 1 update; WARNING after 2 updates ≥ 6 h apart **and** at least one independent model (ECMWF / GFS / ICON) agreeing; no repeat message within 48 h unless it gets worse |
 | SMS / WhatsApp alerts to city administration | `alerts.py` – Twilio REST (set env vars), otherwise logged to `data/alert_log.csv` |
 | Preparedness-based prioritisation | "Priority districts" list; add `data/response_capacity.csv` for capacity |
 | Actionable decision support | Suggested actions per district |
@@ -67,7 +67,45 @@ Each index is mapped to 0–100 using its own published category boundaries:
 | Heat index (°C) | 26.7 caution | 32.2 extreme caution | 39.4 danger | 51.7 extreme danger |
 
 Thermal score = 75 % peak score + 25 % duration score (hours at the "75" level; 6 h = 100).
-Bands: < 25 VERY LOW, < 45 LOW, < 60 MODERATE, < 75 HIGH, ≥ 75 EXTREME.
+Bands follow the UTCI categories of the same heat, so the label never
+contradicts the "feels like": < 25 VERY LOW (no stress), < 50 LOW (moderate),
+< 75 MODERATE (strong), < 92 HIGH (very strong), ≥ 92 EXTREME (extreme, or very
+strong heat for most of the day). A typical hot Tamil Nadu afternoon is HIGH;
+EXTREME is kept for days that stand out, to avoid "heat fatigue".
+
+### How "feels like" handles sun, cloud and ground heat
+
+UTCI needs the **mean radiant temperature** (MRT) – how much heat reaches the
+body as radiation. It is computed every hour from the forecast, following the
+method behind the Copernicus ERA5-HEAT data set (Di Napoli et al. 2020,
+*Int J Biometeorol* 64:1233):
+
+- direct sun (direct normal irradiance) × the body's projected area at the real
+  sun elevation for that district and hour,
+- diffuse sky light and sunlight reflected off the ground (albedo 0.2),
+- longwave heat from the sky (Brutsaert clear-sky emissivity, raised by cloud
+  cover as in Crawford & Duchon 1999) and from the ground (forecast ground
+  surface temperature – often 50 °C on a sunny afternoon).
+
+So clouds count twice: they cut direct sun, and they add heat at night and on
+humid days. The earlier indoor-comfort formula (ASHRAE 55 solar gain) assumed a
+clear sky and a fixed sun angle, and overstated afternoon "feels like" by about
+2–3 °C.
+
+### Avoiding warning fatigue
+
+1. Warnings use IMD heat-wave rules (temperature vs the local normal), not the
+   UTCI band – ordinary summer days are hot but not heat waves.
+2. A heat wave must show up in two forecast updates at least 6 h apart.
+3. At least one of three independent models (ECMWF, GFS, ICON, each corrected
+   for running warm or cool, `data/model_bias.json`) must agree with the main
+   forecast. Requiring 2 of 3 was tested and rejected: on the May 2024 replay it
+   would have missed Erode, where the coarser models under-forecast the heat.
+4. Once sent, a district is not messaged again within 48 h unless the colour
+   gets worse (e.g. ORANGE → RED is sent as an update).
+
+On the May 2024 replay this gives 19 warnings and holds back 4 low-confidence
+districts (e.g. Krishnagiri, where no other model agreed).
 
 ### Heat-wave warnings (IMD criteria)
 
@@ -236,9 +274,34 @@ This prototype implements the backend part of that stack (FastAPI, pythermalcomf
 APScheduler, Twilio, GeoJSON) and uses a PyQt desktop
 dashboard in place of the React/Leaflet frontend. Local files stand in for PostgreSQL.
 
-### Free weather source
+### Weather data – what Open-Meteo is
 
-Open-Meteo is used for the prototype because it provides forecast data without an API key. For a production system, the weather provider should be selected according to the project's data licensing, accuracy and operational requirements.
+[Open-Meteo](https://open-meteo.com) is a free weather API that serves the
+forecasts national weather services publish – ECMWF (Europe), GFS (USA), ICON
+(Germany) and others – without an API key. Used here:
+
+| What | Open-Meteo API | Used for |
+|---|---|---|
+| Hourly forecast, 5 days: temperature, humidity, wind, global / direct / diffuse radiation, cloud cover, ground surface temperature | Forecast API | UTCI, heat index, danger hours |
+| Daily max temperature from ECMWF, GFS and ICON separately | Forecast API (`models=`) | Second-opinion check before warnings |
+| Daily max temperature 2022–2025 | Historical forecast API | Usual (normal) Tmax per district and date |
+| Same, per model, since Feb 2024 | Historical forecast API | Each model's warm/cool bias |
+| Hourly weather for 30 Apr – 4 May 2024 | Historical forecast API | Replay |
+
+Limitations: one grid point per district (≈ 9–25 km models), and normals from 4
+years of model data rather than IMD's 30-year station normals.
+
+### Other data sources worth adding
+
+| Source | What it gives | Use |
+|---|---|---|
+| IMD (mausam.imd.gov.in) – district heat-wave warnings, station observations and normals | Official warnings and 30-year normals | Validate our warnings; replace model normals |
+| NDMA SACHET (sachet.ndma.gov.in) – CAP alert feed | Official alerts already issued | Avoid duplicating / contradicting official alerts |
+| Copernicus ERA5-HEAT (Climate Data Store) | Hourly UTCI and MRT reanalysis since 1940 | Check our UTCI against the reference data set |
+| Census 2011 tables C-13 (age) and B-series (workers) | Share of people 60+ and of agricultural / marginal workers per district | Real vulnerability instead of population only |
+| NFHS-5 district fact sheets | Health indicators (e.g. hypertension, anaemia) | Health vulnerability |
+| Tamil Nadu SDMA Heat Action Plan | Official actions per alert level | Replace the prototype action text |
+| ESA WorldCover / Bhuvan land use; OpenStreetMap | Green cover, built-up area, hospitals, cooling points | Ward-level heat exposure and response capacity |
 
 ### Census source
 

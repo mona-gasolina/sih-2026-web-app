@@ -143,3 +143,34 @@ def district_code(forecast):
 
 def code_index(code):
     return CODES.index(code) if code in CODES else 0
+
+
+def ensemble_check(forecast, model_tmax, normals, bias, kind="plains"):
+    """
+    Runs the same IMD test on each independent weather model (ECMWF, GFS, ICON).
+
+    forecast:   the main forecast days (for dates and labels)
+    model_tmax: {model: {date: Tmax}} from weather.normalize
+    normals:    365 daily Tmax normals (main-forecast archive)
+    bias:       {model: [365 offsets]} – how much warmer/cooler that model runs
+    Returns {"codes": {model: code}, "tmax": {model: {date: Tmax}}, "agree": n, "total": n}
+    where "agree" counts models whose own forecast is a heat wave (YELLOW or above).
+    """
+    codes, used = {}, {}
+    for model, series in (model_tmax or {}).items():
+        days = []
+        for day in forecast:
+            tmax = series.get(day["date"])
+            if tmax is None:
+                continue
+            normal = normal_for(normals, day["date"])
+            offsets = (bias or {}).get(model)
+            if normal is not None and offsets:
+                normal += offsets[_normal_index(day["date"])]
+            level, _ = classify_day(tmax, normal, kind)
+            days.append({"heatwave": level, "date_text": day["date_text"], "temp_max": tmax})
+        if days:
+            codes[model] = district_code(days)["code"]
+            used[model] = {d["date_text"]: d["temp_max"] for d in days}
+    return {"codes": codes, "tmax": used, "agree": sum(1 for c in codes.values() if c != "GREEN"),
+            "total": len(codes)}

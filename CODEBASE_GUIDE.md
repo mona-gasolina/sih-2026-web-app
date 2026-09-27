@@ -82,6 +82,7 @@ Think of the app as layers. Each layer only uses the ones below it.
 | `alert_state.json` | How many updates in a row each district has been risky | No |
 | `alert_log.csv` | Every alert that was sent or logged | No |
 | `tmax_normals.json` | Normal daily max temperature per district (for IMD departures) | Yes |
+| `model_bias.json` | How warm/cool ECMWF, GFS and ICON run per district and date | Yes |
 | `replay_2024-04-30.json` | Archived weather for the replay mode (made on first use) | Yes, for offline demos |
 | `response_capacity.csv` | *Optional.* Preparedness score per district (0–100) | Yes, if you add it |
 
@@ -116,8 +117,8 @@ main()                                   main.py
            └─ updates summary tiles, alert list, priority list, right panel
 ```
 
-A timer calls `load_weather()` again every hour, and **F5** or the
-"Refresh live weather" button calls it immediately.
+A timer calls `load_weather()` again every hour, and the **⟳ Refresh**
+button in the top bar (or F5 / Ctrl+R) calls it immediately.
 
 **Replay mode.** Choosing a replay under WEATHER DATA sets `MainWindow.replay`
 to a start date. The same worker then calls `get_weather(..., replay=date)`,
@@ -134,14 +135,22 @@ Air temperature alone doesn't tell you how dangerous heat is. Humidity,
 wind and sunshine matter too.
 
 - **UTCI** (Universal Thermal Climate Index) uses all four: temperature,
-  humidity, wind and solar radiation. It comes from the `pythermalcomfort`
+  humidity, wind and radiation. It comes from the `pythermalcomfort`
   library.
 - **Heat index** (NOAA/NWS) uses temperature and humidity only. It's the
   **fallback** when `pythermalcomfort` isn't installed.
 
+The radiation part is the **mean radiant temperature** (`mean_radiant_temperature()`):
+direct sun at the real sun angle (`solar_elevation()`), diffuse sky light,
+sunlight bounced off the ground, heat from the sky (more when it's cloudy)
+and heat from the ground (the forecast ground temperature). Same method as the
+Copernicus ERA5-HEAT data set – see the README.
+
 ```python
-value, model = stress_value(tdb=35, rh=60, wind=2.0, solar=700)
-# value = e.g. 41.3,  model = "UTCI" or "Heat index"
+hour = {"temperature": 35, "humidity": 50, "wind": 2.0, "solar": 900, "dni": 850,
+        "diffuse": 120, "cloud": 5, "ground_temp": 50, "time": "2026-05-01T13:00"}
+value, model = stress_value(hour, lat=9.93, lon=78.12)       # (41.5, "UTCI")
+values, model = stress_values(day_hours, lat, lon)           # a whole day in one call (fast)
 ```
 
 ### 5.2 Turning it into a 0–100 score
@@ -172,13 +181,16 @@ That's `combined_thermal_score()`. The card that says
 
 ### 5.4 Risk band
 
-| Thermal score | Band |
-|---|---|
-| under 25 | VERY LOW |
-| 25 – 44 | LOW |
-| 45 – 59 | MODERATE |
-| 60 – 74 | HIGH |
-| 75 and above | EXTREME |
+| Thermal score | Band | Same heat in UTCI words |
+|---|---|---|
+| under 25 | VERY LOW | no heat stress |
+| 25 – 49 | LOW | moderate |
+| 50 – 74 | MODERATE | strong |
+| 75 – 91 | HIGH | very strong |
+| 92 and above | EXTREME | extreme, or very strong most of the day |
+
+The bands match the UTCI categories so the screen never says "extreme" next to
+"very strong heat stress". A normal hot afternoon is HIGH.
 
 ### 5.5 Relative risk (heat + people)
 
@@ -269,6 +281,15 @@ Why 6 hours: the app downloads every hour, but the weather models behind
 Open-Meteo publish a new run about every 6 hours. Two downloads an hour apart
 are usually the *same* forecast, so they would not be a real confirmation
 (`MIN_UPDATE_GAP_HOURS`, `MAX_UPDATE_GAP_HOURS` in `alerts.py`).
+
+**Second opinion.** `heatwave.ensemble_check()` runs the same IMD test on three
+independent models (ECMWF, GFS, ICON), after removing each model's usual
+warm/cool bias (`weather.get_model_bias()`, saved in `data/model_bias.json`).
+At least `ENSEMBLE_MIN_AGREE` (1) must agree with the main forecast, otherwise
+the district stays on WATCH marked "low confidence".
+
+**No repeats.** `_should_send()` sends once per heat wave. It sends again only
+if the colour gets worse, or after `RESEND_HOURS` (48).
 
 - `evaluate()` works out WATCH/WARNING for every district and remembers the
   count in `data/alert_state.json`. Only real, freshly downloaded forecasts
@@ -447,7 +468,9 @@ multiplied by it. For sizes in drawing code, use `scaled(px)`.
 | **Relative risk** | 0–100: thermal score (70%) + population exposure (30%) |
 | **Danger range** | Heat index ≥ 39.4°C or UTCI ≥ 38°C |
 | **Heat wave (IMD)** | Tmax well above the local normal (see §8); colour YELLOW / ORANGE / RED |
-| **WATCH / WARNING** | IMD heat wave seen in 1 update / confirmed in 2 updates in a row (≥ 6 h apart) |
+| **WATCH / WARNING** | IMD heat wave seen in 1 update / confirmed in 2 updates (≥ 6 h apart) with another model agreeing |
+| **MRT** | Mean radiant temperature – heat reaching the body as radiation (sun, sky, ground) |
+| **Ensemble / second opinion** | The same test run on ECMWF, GFS and ICON forecasts |
 | **Replay** | Archived weather for a past heat wave, shown as if it were the forecast |
 | **Priority score** | Used to rank which districts need attention first |
 | **GeoJSON** | A text file format for map shapes |

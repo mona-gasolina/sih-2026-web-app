@@ -125,6 +125,7 @@ def _summary(name, m):
         "imd_label": m["imd"]["label"],
         "temperature": m["temperature"],
         "humidity": m["humidity"],
+        "cloud_cover": m.get("cloud"),
         "feels_like_now": m["stress"],
         "feels_like_peak_today": m["today_peak_stress"],
         "stress_model": m["stress_model"],
@@ -133,6 +134,8 @@ def _summary(name, m):
         "thermal_score": m["thermal_score"],
         "relative_risk": m["risk_score"],
         "priority": m["priority"],
+        "models_agreeing": m.get("ensemble", {}).get("agree"),
+        "models_total": m.get("ensemble", {}).get("total"),
         "population_2011": m["demographic"].get("population", 0),
         "terrain": m["terrain"],
     }
@@ -222,7 +225,8 @@ def district(name: str, replay: str = REPLAY_QUERY):
     return {**_source(snap), **_summary(district_name, m),
             "wind_ms": m["wind"], "solar_wm2": m["solar"], "heat_index_now": m["heat_index"],
             "vulnerability": m["vulnerability"], "response_capacity": m["capacity"],
-            "imd": m["imd"], "forecast": m["forecast"], "alert": alert,
+            "ground_temp": m.get("ground_temp"),
+            "imd": m["imd"], "ensemble": m.get("ensemble"), "forecast": m["forecast"], "alert": alert,
             "suggested_actions": alert_engine.suggested_actions(m),
             "census_note": m["demographic"].get("note")}
 

@@ -31,7 +31,6 @@ from map_view import TamilNaduMap
 from panels import DetailPanel, band_chip
 from heatwave import code_index
 from pipeline import placeholder_metrics
-from thermal import engine_name
 from ui_controls import TextSizeControl, ThemeToggle, fit_to_screen
 from service import compute_all
 
@@ -358,8 +357,10 @@ def _log_time(stamp):
 
 
 class AlertLogDialog(QDialog):
-    COLUMNS = [("timestamp", "When"), ("district", "District"), ("level", "Level"),
-               ("risk", "Heat-wave code"), ("recipient", "Sent to"), ("channel", "Channel"),
+    # (log field, column title). "Logged" is when the alert was created;
+    # "Heat expected from" is the first forecast heat-wave day it was about.
+    COLUMNS = [("timestamp", "Logged"), ("district", "District"), ("level", "Alert"),
+               ("code", "Colour"), ("heat_from", "Heat expected from"), ("recipient", "Sent to"),
                ("status", "Status")]
 
     def __init__(self, parent=None):
@@ -376,12 +377,14 @@ class AlertLogDialog(QDialog):
         layout.addWidget(title)
         channels = alert_engine.gateway_status()
         sub = QLabel(
-            f"Gateway: {', '.join(channels)} via Twilio" if channels else
-            "SMS/WhatsApp gateway not configured – alerts are recorded here only. "
-            "Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM to send real messages."
+            f"Alerts go out by {' and '.join(channels)}." if channels else
+            "Text messages aren't set up on this computer yet, so alerts are saved here instead."
         )
         sub.setObjectName("subtitle")
         sub.setWordWrap(True)
+        if not channels:
+            sub.setToolTip("To send real SMS/WhatsApp messages, set TWILIO_ACCOUNT_SID, "
+                           "TWILIO_AUTH_TOKEN and TWILIO_FROM (see README).")
         layout.addWidget(sub)
         self.rows = alert_engine.read_log()
         table = QTableWidget(len(self.rows), len(self.COLUMNS))
@@ -397,19 +400,21 @@ class AlertLogDialog(QDialog):
         header = table.horizontalHeader()
         header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.Stretch)      # "Sent to" takes the spare width
+        header.setSectionResizeMode(5, QHeaderView.Stretch)      # "Sent to" takes the spare width
         for r, row in enumerate(self.rows):
             for col, (key, _) in enumerate(self.COLUMNS):
-                value = _log_time(row.get(key)) if key == "timestamp" else row.get(key, "")
-                cell = QTableWidgetItem(value)
-                cell.setToolTip(row.get("message", ""))
-                table.setItem(r, col, cell)
+                value = row.get(key, "")
+                if key == "timestamp":
+                    value = _log_time(value)
+                elif key in ("level", "code"):
+                    value = value.title()
+                table.setItem(r, col, QTableWidgetItem(value))
         table.itemSelectionChanged.connect(
             lambda: self._show_message(table.currentRow()))
         layout.addWidget(table, 1)
 
-        self.message = QLabel("No alerts have been logged yet." if not self.rows else
-                              "Select a row to read the full message.")
+        self.message = QLabel("No alerts yet." if not self.rows else
+                              "Click a row to see the message that was sent.")
         self.message.setObjectName("info")
         self.message.setWordWrap(True)
         self.message.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -421,7 +426,7 @@ class AlertLogDialog(QDialog):
 
     def _show_message(self, row):
         if 0 <= row < len(self.rows):
-            self.message.setText(self.rows[row].get("message", "") or "No message text was logged.")
+            self.message.setText("Message:  " + (self.rows[row].get("message", "") or "(none saved)"))
 
 
 # ---------------------------------------------------------------------------
@@ -471,7 +476,7 @@ class MainWindow(QMainWindow):
         row.setSpacing(0)
         row.addWidget(self._build_left_panel())
         row.addWidget(self._build_centre(), 1)
-        self.detail = DetailPanel(lambda: self.load_weather(force=True))
+        self.detail = DetailPanel()
         row.addWidget(self.detail)
         root.addLayout(row, 1)
 
@@ -508,11 +513,20 @@ class MainWindow(QMainWindow):
         brand_box.addWidget(self.subtitle)
         layout.addLayout(brand_box, 1)
 
-        self.updated_label = QLabel("Loading weather…")
+        self.updated_label = QLabel("Getting the forecast…")
         self.updated_label.setWordWrap(True)
         set_base_style(self.updated_label, f"font-size:{FS_SMALL}px;color:$muted;")
         self.updated_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addWidget(self.updated_label)
+        self.refresh_btn = QPushButton("⟳  Refresh")
+        self.refresh_btn.setCursor(Qt.PointingHandCursor)
+        self.refresh_btn.setToolTip("Get the latest forecast now (F5 or Ctrl+R). It also updates by itself every hour.")
+        set_base_style(self.refresh_btn, f"QPushButton {{ background:$surface2;color:$text;border:1px solid $border;"
+                                         f"border-radius:12px;padding:9px 14px;font-weight:700;font-size:{FS_SMALL + 1}px; }}"
+                                         f"QPushButton:hover {{ background:$chip;border-color:$borderStrong; }}"
+                                         f"QPushButton:disabled {{ color:$subtle; }}")
+        self.refresh_btn.clicked.connect(lambda: self.load_weather(force=True))
+        layout.addWidget(self.refresh_btn, 0, Qt.AlignVCenter)
 
         self.theme_toggle = ThemeToggle()
         layout.addWidget(self.theme_toggle, 0, Qt.AlignVCenter)
@@ -596,10 +610,10 @@ class MainWindow(QMainWindow):
             body.addWidget(self.notify_btn)
         body.addWidget(info_label(
             "How alerts work",
-            "Alerts follow the IMD heat-wave criteria (max temperature vs the local normal), coloured "
-            "YELLOW / ORANGE / RED.\nWATCH = seen in one forecast update.\nWARNING = confirmed in "
-            f"{alert_engine.CONFIRM_UPDATES} updates at least {alert_engine.MIN_UPDATE_GAP_HOURS} h apart; "
-            "officers are notified automatically."
+            "We use IMD's heat-wave rules: how far the day's maximum is above the usual for that date.\n"
+            "Watch – a heat wave showed up in one forecast.\n"
+            f"Warning – it's still there {alert_engine.MIN_UPDATE_GAP_HOURS}+ hours later and another "
+            "forecast model agrees. Officers are then messaged once."
         ))
 
         body.addSpacing(4)
@@ -609,10 +623,9 @@ class MainWindow(QMainWindow):
         body.addLayout(self.priority_box)
         body.addWidget(info_label(
             "How districts are ranked",
-            "Ranked by IMD heat-wave code, then relative risk over the next 3 days, hours of dangerous "
-            "heat and " + ("response capacity." if self.capacities else
-                           "response capacity (add data/response_capacity.csv to include it).")
-            + "\nPrototype uses district boundaries; production will use ward / zone boundaries."
+            "Heat-wave colour first, then risk over the next 3 days, hours of very strong heat"
+            + (" and response capacity." if self.capacities else ".")
+            + "\nDistricts for now – wards and zones later."
         ))
         body.addStretch()
         return self.left
@@ -629,7 +642,7 @@ class MainWindow(QMainWindow):
         kpis.setSpacing(12)
         self.kpi_high = KpiTile("Heat waves")
         self.kpi_hot = KpiTile("Hottest now")
-        self.kpi_feels = KpiTile("Peak feels-like")
+        self.kpi_feels = KpiTile("Feels like (max)")
         self.kpi_pop = KpiTile("People exposed")
         self.kpi_alerts = KpiTile("Alerts")
         for tile in (self.kpi_high, self.kpi_hot, self.kpi_feels, self.kpi_pop, self.kpi_alerts):
@@ -646,7 +659,7 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         self.map_title = title = QLabel(f"{STATE_NAME}  •  Heat Risk Map")
         set_base_style(title, f"font-size:{FS_TITLE}px;font-weight:800;color:$text;")
-        self.map_hint = hint = QLabel("Point at a district for quick data  •  Click for full details")
+        self.map_hint = hint = QLabel("Hover over a district for a quick look, click it for details")
         hint.setWordWrap(True)
         hint.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         set_base_style(hint, f"font-size:{FS_BODY}px;color:$muted;")
@@ -685,7 +698,8 @@ class MainWindow(QMainWindow):
             QShortcut(QKeySequence(keys), self,
                       activated=lambda d=delta: self.size_control.set_scale(font_scale() + d))
         QShortcut(QKeySequence("Ctrl+0"), self, activated=lambda: self.size_control.set_scale(1.0))
-        QShortcut(QKeySequence("F5"), self, activated=lambda: self.load_weather(force=True))
+        for keys in ("F5", "Ctrl+R"):    # many laptops need Fn for F5, so Ctrl+R works too
+            QShortcut(QKeySequence(keys), self, activated=lambda: self.load_weather(force=True))
 
     # ------------------------------------------------------------------ sizing
     def resizeEvent(self, event):
@@ -747,8 +761,8 @@ class MainWindow(QMainWindow):
             self._reload_pending = True        # e.g. data source switched mid-download
             return
         self._reload_pending = False
-        self.detail.refresh.setEnabled(False)
-        self.detail.refresh.setText("Updating…")
+        self.refresh_btn.setEnabled(False)
+        self.refresh_btn.setText("Updating…")
         self.worker = WeatherWorker(self.locations, self.demographics, self.capacities, force, self.replay)
         self.worker.finished_data.connect(self.weather_ready)
         self.worker.finished.connect(self._worker_finished)
@@ -768,8 +782,8 @@ class MainWindow(QMainWindow):
                 item.set_metrics(results[item.zone_name])
             elif info.get("replay"):              # replay could not be loaded – no stale numbers
                 item.set_metrics(placeholder_metrics(item.metrics["demographic"]))
-        self.detail.refresh.setEnabled(not self.replay)
-        self.detail.refresh.setText("Replay – live refresh off" if self.replay else "Refresh live weather")
+        self.refresh_btn.setEnabled(not self.replay)
+        self.refresh_btn.setText("⟳  Refresh")
 
         zone_metrics = {i.zone_name: i.metrics for i in self.map.zone_items if i.metrics.get("loaded")}
         self.alerts, newly_confirmed = alert_engine.evaluate(zone_metrics, info)
@@ -784,22 +798,27 @@ class MainWindow(QMainWindow):
         self._update_status()
 
         fetched = datetime.fromtimestamp(info.get("fetched_at", time.time())).strftime("%H:%M")
-        text = f"{info.get('source', '')}  •  data from {fetched}\nF5 to refresh"
+        text = f"Forecast updated {fetched}"
+        tip = ("Weather from Open-Meteo, which combines forecasts from national weather services "
+               "(ECMWF, GFS, ICON and others). It updates by itself every hour.")
         if info.get("source") == "DEMO":
-            text = "OFFLINE – showing DEMO data (no internet)\nF5 to retry"
+            text, tip = "Offline – showing sample data", f"No internet connection: {info.get('error', '')}"
+        elif "offline" in info.get("source", ""):
+            text = f"Offline – forecast from {fetched}"
         if self.replay:
             label = dict(REPLAY_EVENTS).get(self.replay, self.replay)
-            text = f"REPLAY – archived weather\n{label}"
+            text, tip = f"Replay: {label}", "Past weather, shown as if it were the forecast."
             self.replay_banner.setText(
-                f"REPLAY – archived weather, {label}. Not live data; nothing is sent to officers."
+                f"Replaying the {label} – past weather, not a live forecast. Nothing is sent to officers."
                 + (f" ({info['error']})" if info.get("error") else ""))
             self.replay_banner.setToolTip("Past weather shown as if it were the forecast. "
                                           "Switch back under WEATHER DATA in the side panel.")
         self.replay_banner.setVisible(bool(self.replay))
         self.updated_label.setText(text)
+        self.updated_label.setToolTip(tip)
         if newly_confirmed:
             names = ", ".join(a["district"] for a in newly_confirmed)
-            self.updated_label.setText(self.updated_label.text() + f"\nNew WARNING: {names}")
+            self.updated_label.setText(text + f"\nNew warning: {names}")
 
         if self.selected_item:
             self._show_detail(self.selected_item)
@@ -812,7 +831,7 @@ class MainWindow(QMainWindow):
         high = [n for n, m in zm.items() if m["imd"]["code"] != "GREEN"]
         worst = max((zm[n]["imd"]["code"] for n in high), key=code_index, default="GREEN")
         self.kpi_high.set(f"{len(high)} / {total}",
-                          f"districts • worst IMD {worst}" if high else "districts, next 5 days",
+                          f"districts · worst: {worst.lower()} alert" if high else "districts, next 5 days",
                           risk_band_color(worst))
         hot_name, hot = max(zm.items(), key=lambda kv: kv[1]["temperature"])
         self.kpi_hot.set(f"{hot['temperature']:.1f}°C", hot_name, risk_band_color(hot["risk"]))
@@ -835,7 +854,7 @@ class MainWindow(QMainWindow):
     def _update_alert_list(self):
         clear_layout(self.alert_box)
         if not self.alerts:
-            self.alert_box.addWidget(muted_label("No heat wave forecast in the next 5 days."))
+            self.alert_box.addWidget(muted_label("No heat wave expected in the next 5 days."))
             return
         for alert in self.alerts[:8]:
             row = ClickableRow()
@@ -844,13 +863,13 @@ class MainWindow(QMainWindow):
             name = QLabel(alert["district"])
             name.setWordWrap(True)
             set_base_style(name, f"font-size:{FS_BODY}px;font-weight:800;")
-            when = QLabel(f"IMD {alert['colour']} • from {alert['day']}")
+            when = QLabel(f"{alert['colour'].title()} alert · from {alert['day']}")
             when.setWordWrap(True)
             set_base_style(when, f"font-size:{FS_SMALL}px;color:$muted;")
             text.addWidget(name)
             text.addWidget(when)
             row.row.addLayout(text, 1)
-            row.row.addWidget(band_chip(alert["level"], alert["colour"]), 0, Qt.AlignTop)
+            row.row.addWidget(band_chip(alert["level"].title(), alert["colour"]), 0, Qt.AlignTop)
             row.clicked.connect(lambda n=alert["district"]: self.select_by_name(n))
             self.alert_box.addWidget(row)
         if len(self.alerts) > 8:
@@ -872,7 +891,8 @@ class MainWindow(QMainWindow):
                                      (m["peak_band"] if m["peak_band"] != "—" else "LOW"))
             set_base_style(score, f"font-size:{FS_SMALL}px;font-weight:800;color:{contrast_text(colour)};"
                                   f"background:{colour};border-radius:7px;padding:3px 9px;")
-            score.setToolTip(f"Priority score. IMD {m['imd']['code']}; highest heat-stress band: {m['peak_band']}")
+            score.setToolTip(f"Priority {m['priority']:.0f}/100 – worst heat stress this week: "
+                             f"{m['peak_band'].lower()}")
             row.row.addWidget(num)
             row.row.addWidget(label, 1)
             row.row.addWidget(score)
@@ -881,12 +901,13 @@ class MainWindow(QMainWindow):
 
     def _update_status(self):
         channels = alert_engine.gateway_status()
-        gateway = ", ".join(channels) if channels else "logged only (SMS gateway not configured)"
-        weather = "REPLAY of archived Open-Meteo data" if self.replay else "Open-Meteo, hourly"
+        alerts_text = (f"alerts by {' and '.join(channels)}" if channels else
+                       "text alerts not set up – saved to the log")
+        weather = "past weather (replay)" if self.replay else "forecast updates hourly"
+        usual = "" if self.weather_info.get("normals") else " (usual temperatures not loaded)"
         self.status.set_full_text(
-            f"Weather: {weather}   •   {engine_name()}   •   "
-            f"IMD heat-wave criteria{'' if self.weather_info.get('normals') else ' (normals not loaded – 45 °C rule only)'}   •   "
-            f"Census 2011   •   Alerts: {gateway}   •   {APP_VERSION}"
+            f"{weather.capitalize()}   ·   'Feels like' = UTCI   ·   Heat waves = IMD rules{usual}   ·   "
+            f"Population = Census 2011   ·   {alerts_text.capitalize()}   ·   {APP_VERSION}"
         )
 
     # ------------------------------------------------------------------ selection

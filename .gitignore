@@ -226,3 +226,4 @@ data/alert_log.csv
 .vs/
 # Prototype accounts (password hashes) stay on each computer
 data/users.json
+data/alert_log_old.csv

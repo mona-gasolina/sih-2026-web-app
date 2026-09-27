@@ -165,7 +165,7 @@ class TamilNaduMap(QGraphicsView):
         grid.setHorizontalSpacing(22)
         grid.setVerticalSpacing(6)
         self.popup_values = {}
-        rows = ("Temperature now", "Peak feels-like today", "Humidity", "Relative risk", "Population (2011)")
+        rows = ("Temperature now", "Feels like today (max)", "Humidity", "Risk score", "Population (2011)")
         for row, key in enumerate(rows):
             name = QLabel(key)
             set_base_style(name, f"font-size:{FS_BODY}px;color:$muted;")
@@ -179,7 +179,7 @@ class TamilNaduMap(QGraphicsView):
 
         self.popup_risk = QLabel()
         layout.addWidget(self.popup_risk)
-        hint = QLabel("Click for full details")
+        hint = QLabel("Click for details")
         set_base_style(hint, "font-size:13px;color:$subtle;")
         layout.addWidget(hint)
         self.popup.hide()
@@ -190,18 +190,18 @@ class TamilNaduMap(QGraphicsView):
         self.popup_title.setText(item.zone_name)
         if m.get("loaded"):
             self.popup_values["Temperature now"].setText(f"{m['temperature']:.1f} °C")
-            self.popup_values["Peak feels-like today"].setText(f"{m['today_peak_stress']:.0f} °C")
+            self.popup_values["Feels like today (max)"].setText(f"{m['today_peak_stress']:.0f} °C")
             self.popup_values["Humidity"].setText(f"{m['humidity']:.0f}%")
-            self.popup_values["Relative risk"].setText(f"{m['risk_score']:.0f} / 100")
+            self.popup_values["Risk score"].setText(f"{m['risk_score']:.0f} / 100")
         else:
-            for key in ("Temperature now", "Peak feels-like today", "Humidity", "Relative risk"):
+            for key in ("Temperature now", "Feels like today (max)", "Humidity", "Risk score"):
                 self.popup_values[key].setText("…")
         self.popup_values["Population (2011)"].setText(f"{pop:,}" if pop else "—")
 
         start, end, text_color = risk_gradient(m.get("risk_score", 0))
         imd = m.get("imd", {}).get("code", "GREEN")
-        self.popup_risk.setText(f"HEAT STRESS: {m.get('risk', '…')}"
-                                + (f"  •  IMD {imd}" if m.get("loaded") and imd != "GREEN" else ""))
+        self.popup_risk.setText(f"{m.get('risk', '…').title()} heat stress"
+                                + (f"  ·  {imd.title()} alert" if m.get("loaded") and imd != "GREEN" else ""))
         set_base_style(
             self.popup_risk,
             f"font-size:{FS_LABEL}px;font-weight:800;color:{text_color};"

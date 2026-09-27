@@ -280,7 +280,7 @@ class LoginDialog(QDialog):
         ))
         form.addWidget(forgot, 0, Qt.AlignLeft)
 
-        demo = _label("Prototype sign-in:  System Admin  →  admin  /  Admin@123", "info")
+        demo = _label("Demo login:  System Admin  ·  admin  ·  Admin@123", "info")
         demo.setWordWrap(True)
         form.addWidget(demo)
 

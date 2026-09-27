@@ -32,13 +32,24 @@ FORECAST_DAYS = 5
 NORMALS_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 NORMALS_YEARS = (2022, 2025)
 NORMALS_SMOOTH_DAYS = 15          # ± window used to smooth the day-of-year mean
+# Independent weather models used to check agreement before a warning is sent.
+ENSEMBLE_MODELS = {
+    "ecmwf_ifs025": "ECMWF (Europe)",
+    "gfs_seamless": "GFS (USA)",
+    "icon_seamless": "ICON (Germany)",
+}
+ENSEMBLE_MIN_AGREE = 1            # other models that must back the main forecast for a WARNING
+                                  # (2 of 3 missed the real May 2024 Erode heat wave: the coarser
+                                  # models under-forecast inland hot spots)
+MODEL_BIAS_START = "2024-02-03"   # first day all three models are in the Open-Meteo archive
+MODEL_BIAS_FILE = DATA_DIR / "model_bias.json"
 
 # Replay of a real past heat wave (archived Open-Meteo weather), so the warning
 # flow can be shown outside the heat season. (start date, label). 30 Apr – 4 May
 # 2024: IMD heat-wave warnings for interior Tamil Nadu; the IMD rules in
 # heatwave.py flag 23 of 37 districts for this window.
 REPLAY_EVENTS = [
-    ("2024-04-30", "Heat wave, 30 Apr – 4 May 2024"),
+    ("2024-04-30", "30 Apr – 4 May 2024 heat wave"),
 ]
 
 # ---------------------------------------------------------------------------
