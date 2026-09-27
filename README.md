@@ -303,9 +303,25 @@ years of model data rather than IMD's 30-year station normals.
 | Tamil Nadu SDMA Heat Action Plan | Official actions per alert level | Replace the prototype action text |
 | ESA WorldCover / Bhuvan land use; OpenStreetMap | Green cover, built-up area, hospitals, cooling points | Ward-level heat exposure and response capacity |
 
-### Census source
+### Census source – why 2011
 
-The bundled population data is based on Census 2011 district population figures. The production demographic layer should use the official Census tables at ward/sub-district/town/village level where available.
+The population figures are from **Census 2011, which is still India's latest
+official census**. The 2021 census was postponed and replaced by **Census 2027**:
+house listing runs April–September 2026, and the population count itself is in
+February 2027 ([PIB](https://www.pib.gov.in/PressReleasePage.aspx?PRID=2248021&reg=3&lang=1)).
+Until its results are published, there are no official post-2011 district
+populations.
+
+Plan:
+
+1. **Now:** Census 2011 district figures (`data/census_tn_2011.csv`).
+2. **Next:** scale them to the current year using the official *Report of the
+   Technical Group on Population Projections 2011–2036* (National Commission on
+   Population, MoHFW, 2020), keeping each district's 2011 share of the state
+   total. Shown as "estimated".
+3. **Future:** switch to Census 2027 figures once released; for ward-level
+   detail, gridded estimates such as WorldPop or GHSL (≈100 m, built from census
+   data and satellite imagery of buildings).
 
 ## Colour system
 

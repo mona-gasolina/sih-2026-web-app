@@ -75,7 +75,7 @@ Think of the app as layers. Each layer only uses the ones below it.
 | File | What it is | Committed to git? |
 |---|---|---|
 | `tamil_nadu.geojson` | District shapes (the map outlines) | Yes |
-| `census_tn_2011.csv` | Population per district (Census 2011) | Yes |
+| `census_tn_2011.csv` | Population per district (Census 2011 – still the latest official census; Census 2027 results pending) | Yes |
 | `users.json` | Accounts (passwords stored as hashes, never plain text) | No |
 | `ui_settings.json` | This computer's text size and light/dark choice | No |
 | `weather_cache.json` | Last downloaded forecast (reused for 1 hour) | No |

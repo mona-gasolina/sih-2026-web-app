@@ -386,7 +386,8 @@ class CensusCard(SurfaceCard):
         cap = m.get("capacity")
         if cap is not None:
             self.body.addLayout(kv_row("Response capacity", f"{cap:.0f} / 100"))
-        note = d.get("note") or "Based on population for now – age and outdoor-work data come next."
+        note = d.get("note") or ("Census 2011 is still India's latest official count – Census 2027 "
+                                 "figures will replace it. Age and outdoor-work data come next.")
         foot = QLabel(note)
         foot.setWordWrap(True)
         set_base_style(foot, f"font-size:{FS_SMALL}px;color:$subtle;")
