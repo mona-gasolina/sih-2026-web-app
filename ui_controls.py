@@ -1,7 +1,7 @@
 """Small shared controls: text-size stepper, light/dark toggle, eye icons."""
 from PyQt5.QtCore import Qt, QPointF, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
-from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QLineEdit, QAction, QPushButton
+from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QAction, QPushButton
 
 from config import (
     FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP,
@@ -33,8 +33,9 @@ class TextSizeControl(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 6, 8, 6)
         layout.setSpacing(6)
-        if show_caption:
-            layout.addWidget(QLabel("Text size"))
+        self.caption = QLabel("Text size")
+        self.caption.setVisible(show_caption)
+        layout.addWidget(self.caption)
         self.down = QPushButton("A−")
         self.reset = QPushButton("100%")
         self.up = QPushButton("A+")
@@ -63,6 +64,9 @@ class TextSizeControl(QFrame):
         self.down.setEnabled(s > FONT_SCALE_MIN)
         self.up.setEnabled(s < FONT_SCALE_MAX)
 
+    def set_compact(self, compact):
+        self.caption.setVisible(not compact)
+
     def on_theme_changed(self):   # called by config.restyle
         self.sync()
 
@@ -82,6 +86,7 @@ class ThemeToggle(QPushButton):
             QPushButton:hover { background:$chip; border-color:$borderStrong; }
             QPushButton:focus { border:2px solid $focus; }
         """)
+        self.compact = False
         self.clicked.connect(self.toggle)
         self.sync()
 
@@ -93,11 +98,24 @@ class ThemeToggle(QPushButton):
 
     def sync(self):
         dark = theme_name() == "dark"
-        self.setText("☀  Light mode" if dark else "☾  Dark mode")
+        icon, text = ("☀", "Light mode") if dark else ("☾", "Dark mode")
+        self.setText(icon if self.compact else f"{icon}  {text}")
         self.setToolTip("Switch to light mode" if dark else "Switch to dark mode")
+
+    def set_compact(self, compact):
+        self.compact = compact
+        self.sync()
 
     def on_theme_changed(self):
         self.sync()
+
+
+def fit_to_screen(widget, width, height):
+    """Resize to (width, height), but never larger than the screen the widget is on."""
+    anchor = widget.parentWidget() or widget
+    screen = anchor.screen() if hasattr(anchor, "screen") else QApplication.primaryScreen()
+    avail = screen.availableGeometry()
+    widget.resize(min(width, int(avail.width() * 0.94)), min(height, int(avail.height() * 0.92)))
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ Each index is mapped onto 0-100 using ITS OWN published category boundaries:
   Heat index(°C) 26.7 caution 32.2 ext.caution 39.4 danger  51.7 extreme danger
                  (current NWS chart: 80 / 90 / 103 / 125 °F)
   thermal score = 75 % peak-stress score + 25 % exposure-duration score
-      duration = hours in the day at/above the "75" level (UTCI 38 / HI 41);
+      duration = hours in the day at/above the "75" level (UTCI 38 / HI 39.4);
       6 hours → 100. This separates a short afternoon spike from a long,
       dangerous exposure (PDF: heat exposure duration modelling).
 
@@ -24,6 +24,10 @@ UTCI is computed for a person standing in full sun (the worst case). A shade
 value (no solar gain) is reported alongside it. The scores rank human heat
 stress; whether a day is a heat wave – and so whether to warn – is decided
 by heatwave.py (IMD criteria).
+
+Cold: UTCI also covers cold stress (Bröde et al. 2012 categories below 9 °C),
+so cold nights in the Nilgiris are labelled correctly. Cold-wave warnings are
+out of scope for this heat-wave prototype (see README, future scope).
 """
 import math
 
@@ -51,7 +55,9 @@ SCALES = {
         "danger": 38.0,
         "categories": [(46.0, "Extreme heat stress"), (38.0, "Very strong heat stress"),
                        (32.0, "Strong heat stress"), (26.0, "Moderate heat stress"),
-                       (9.0, "No thermal stress"), (-999, "Cold stress")],
+                       (9.0, "No thermal stress"), (0.0, "Slight cold stress"),
+                       (-13.0, "Moderate cold stress"), (-27.0, "Strong cold stress"),
+                       (-40.0, "Very strong cold stress"), (-999, "Extreme cold stress")],
     },
     HEAT_INDEX: {
         "points": [(20.0, 0.0), (26.7, 25.0), (32.2, 50.0), (39.4, 75.0), (51.7, 95.0), (57.0, 100.0)],

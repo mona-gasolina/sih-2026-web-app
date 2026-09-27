@@ -33,20 +33,30 @@ NORMALS_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 NORMALS_YEARS = (2022, 2025)
 NORMALS_SMOOTH_DAYS = 15          # ± window used to smooth the day-of-year mean
 
+# Replay of a real past heat wave (archived Open-Meteo weather), so the warning
+# flow can be shown outside the heat season. (start date, label). 30 Apr – 4 May
+# 2024: IMD heat-wave warnings for interior Tamil Nadu; the IMD rules in
+# heatwave.py flag 23 of 37 districts for this window.
+REPLAY_EVENTS = [
+    ("2024-04-30", "Heat wave, 30 Apr – 4 May 2024"),
+]
+
 # ---------------------------------------------------------------------------
 # Window / layout
 # ---------------------------------------------------------------------------
-# The dashboard is laid out for the size of a maximised window on the user's
-# screen. When the window is made smaller it keeps that layout and shows
-# scroll bars instead of squeezing.
+# Widths are in logical pixels (Windows 125 % scaling on a 1920 px screen =
+# 1536 logical px). The dashboard adapts at two breakpoints; below its
+# minimum size it scrolls instead of clipping.
 WINDOW_WIDTH = 1700
 WINDOW_HEIGHT = 980
 MIN_WINDOW_WIDTH = 640
 MIN_WINDOW_HEIGHT = 480
-DESIGN_MIN_WIDTH = 1280
-DESIGN_MIN_HEIGHT = 720
+COMPACT_WIDTH = 1600              # below this: slimmer top bar and right panel
+NARROW_WIDTH = 1400               # below this: side panel starts collapsed, no name badge
 LEFT_PANEL_WIDTH = 330
 RIGHT_PANEL_WIDTH = 480
+RIGHT_PANEL_COMPACT = 420
+RIGHT_PANEL_NARROW = 380
 
 # ---------------------------------------------------------------------------
 # Typography – sized for older users (nothing below 13px at 100%)

@@ -112,7 +112,7 @@ class TamilNaduMap(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
-        self.setMinimumSize(520, 420)
+        self.setMinimumSize(320, 260)
         self.setAccessibleName("Heat risk map of Tamil Nadu districts")
 
         self._create_popup()

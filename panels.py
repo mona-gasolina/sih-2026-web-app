@@ -10,10 +10,8 @@ from config import (
     set_base_style, qss_gradient, c, scaled,
     temperature_gradient, risk_gradient, risk_band_color, contrast_text,
 )
+from alerts import suggested_actions
 from data_manager import format_population
-
-HIGH_RISK_BANDS = ("HIGH", "EXTREME")
-
 
 def _pill_bg(text_color):
     return "rgba(255,255,255,0.22)" if text_color.upper() == "#FFFFFF" else "rgba(15,23,42,0.10)"
@@ -149,14 +147,14 @@ class ForecastRow(GradientCard):
         mid = QVBoxLayout()
         mid.setSpacing(0)
         when = f" at {day['peak_time']}" if day.get("peak_time") else ""
-        mid.addWidget(self.label(f"Feels {day['stress']:.0f}°C{when}", FS_BODY, 700, wrap=False))
+        mid.addWidget(self.label(f"Feels {day['stress']:.0f}°C{when}", FS_BODY, 700))
         hours = day["hours_danger"]
         mid.addWidget(self.label(
-            f"{hours} h in danger range" if hours else "No hours in danger range", FS_SMALL, 600, wrap=False))
+            f"{hours} h in danger range" if hours else "No hours in danger range", FS_SMALL, 600))
         if day.get("departure") is not None:
             mid.addWidget(self.label(
-                f"{day['departure']:+.1f}° vs normal max {day['normal_max']:.0f}°", FS_SMALL, 600, wrap=False))
-        layout.addLayout(mid)
+                f"{day['departure']:+.1f}° vs normal max {day['normal_max']:.0f}°", FS_SMALL, 600))
+        layout.addLayout(mid, 3)
         right = QVBoxLayout()
         right.setSpacing(4)
         right.addWidget(self.pill(day["risk"]), 0, Qt.AlignRight)
@@ -262,30 +260,6 @@ class TrendChart(QWidget):
 # ---------------------------------------------------------------------------
 # Alert status + actions, population
 # ---------------------------------------------------------------------------
-def suggested_actions(m):
-    """Warning level from the IMD heat-wave code; day-to-day advice from UTCI stress."""
-    code = m.get("imd", {}).get("code", "GREEN")
-    if code in ("RED", "ORANGE"):
-        return [
-            "Activate the Heat Action Plan for this area.",
-            "Open cooling centres and drinking-water points.",
-            "Shift outdoor work away from 12 pm – 4 pm.",
-            "Alert hospitals / PHCs; check on elderly people living alone.",
-        ]
-    if code == "YELLOW":
-        return [
-            "Issue a public heat advisory (SMS, radio, local TV).",
-            "Prepare cooling centres and water points.",
-            "Ask employers of outdoor workers to plan shade and rest breaks.",
-        ]
-    if m.get("peak_band") in HIGH_RISK_BANDS:
-        return [
-            "No heat wave forecast, but outdoor heat stress is high: share hydration and shade guidance.",
-            "Remind employers of outdoor workers about rest breaks in the afternoon.",
-        ]
-    return ["Routine monitoring – no action needed right now."]
-
-
 class ActionsCard(SurfaceCard):
     def __init__(self, m, alert=None):
         super().__init__("HEAT-WAVE STATUS & SUGGESTED ACTIONS")
@@ -433,6 +407,7 @@ class DetailPanel(QFrame):
         while layout.count():
             item = layout.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
             elif item.layout():
                 self._clear(item.layout())

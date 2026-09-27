@@ -1,2 +1,7 @@
+# Desktop dashboard
 PyQt5>=5.15
 pythermalcomfort>=2.10
+# Web API (api.py)
+fastapi>=0.115
+uvicorn>=0.30
+apscheduler>=3.10,<4

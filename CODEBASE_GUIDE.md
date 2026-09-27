@@ -61,9 +61,11 @@ Think of the app as layers. Each layer only uses the ones below it.
 | `pipeline.py` | Takes raw weather and population for one district and produces every number the screen shows. |
 | `thermal.py` | The science: "feels like" temperature, scores (0–100) and risk bands. |
 | `heatwave.py` | IMD heat-wave criteria: is a day a heat wave, and the district's YELLOW/ORANGE/RED code. |
-| `alerts.py` | Decides when to raise an alert and sends SMS/WhatsApp (or logs it). |
+| `alerts.py` | Decides when to raise an alert, what action to suggest, and sends SMS/WhatsApp (or logs it). |
+| `service.py` | One full recompute for all districts; used by both the desktop app and the API. |
+| `api.py` | The web API (FastAPI): the same numbers as JSON, hourly recompute with APScheduler. |
 | `auth.py` | User accounts: sign-in, password hashing, lockout, creating/deactivating officers. |
-| `weather.py` | Downloads the forecast from Open-Meteo and caches it for an hour. |
+| `weather.py` | Downloads the forecast from Open-Meteo and caches it for an hour; Tmax normals; replay of a past heat wave. |
 | `data_manager.py` | Reads the map file and the Census population file. |
 | `config.py` | All settings in one place: colours, themes, font sizes, file paths. |
 | `s1.py`, `s2.py` | Older experiments. Not used by the app. |
@@ -74,11 +76,13 @@ Think of the app as layers. Each layer only uses the ones below it.
 |---|---|---|
 | `tamil_nadu.geojson` | District shapes (the map outlines) | Yes |
 | `census_tn_2011.csv` | Population per district (Census 2011) | Yes |
-| `users.json` | Accounts (passwords stored as hashes, never plain text) | Your choice |
+| `users.json` | Accounts (passwords stored as hashes, never plain text) | No |
 | `ui_settings.json` | This computer's text size and light/dark choice | No |
 | `weather_cache.json` | Last downloaded forecast (reused for 1 hour) | No |
 | `alert_state.json` | How many updates in a row each district has been risky | No |
 | `alert_log.csv` | Every alert that was sent or logged | No |
+| `tmax_normals.json` | Normal daily max temperature per district (for IMD departures) | Yes |
+| `replay_2024-04-30.json` | Archived weather for the replay mode (made on first use) | Yes, for offline demos |
 | `response_capacity.csv` | *Optional.* Preparedness score per district (0–100) | Yes, if you add it |
 
 ---
@@ -100,7 +104,7 @@ main()                                   main.py
       └─ load_weather()                  → starts WeatherWorker in the background
                │
                ▼   (runs on a separate thread so the window doesn't freeze)
-         WeatherWorker.run()
+         WeatherWorker.run()  →  compute_all(...)   service.py (shared with the web API)
            ├─ get_weather(...)            weather.py   → one request for ALL districts (or cache)
            └─ compute_zone(...) per district  pipeline.py → uses thermal.py for the maths
                │
@@ -114,6 +118,11 @@ main()                                   main.py
 
 A timer calls `load_weather()` again every hour, and **F5** or the
 "Refresh live weather" button calls it immediately.
+
+**Replay mode.** Choosing a replay under WEATHER DATA sets `MainWindow.replay`
+to a start date. The same worker then calls `get_weather(..., replay=date)`,
+which returns archived weather for those 5 days, and `compute_zone(..., replay=date)`
+uses that date as "today". Alerts are shown but never sent or stored.
 
 ---
 
@@ -221,6 +230,10 @@ The keys you'll see most often:
   coordinates separated by commas, so we don't make 37 separate calls.
 - **Hourly data** so we can count danger hours.
 - **Cached for 60 minutes** in `data/weather_cache.json`.
+- **Replay**: `get_replay_weather(locations, start)` fetches archived hourly
+  weather from Open-Meteo's historical-forecast API and saves it to
+  `data/replay_<date>.json`, so it works offline after the first time.
+  "Current" conditions in a replay are 3 pm on the first day.
 - **If the internet is down**, it uses a cache up to 24 hours old.
   If there isn't one, it uses made-up **DEMO** data. The screen always
   says which of these it's showing.
@@ -248,9 +261,14 @@ District colour: YELLOW = 2 heat-wave days in a row, ORANGE = 2 severe days in a
                  or 4+ heat-wave days in a row, RED = 3+ severe days in a row
 
 Forecast update 1: district is YELLOW or above             → WATCH   (nothing sent)
-Forecast update 2: still risky                              → WARNING (sent once)
-Any update where it is no longer risky                      → reset
+Forecast update 2, ≥ 6 h later: still risky                 → WARNING (sent once)
+Any update where it is no longer risky, or a gap > 36 h     → reset
 ```
+
+Why 6 hours: the app downloads every hour, but the weather models behind
+Open-Meteo publish a new run about every 6 hours. Two downloads an hour apart
+are usually the *same* forecast, so they would not be a real confirmation
+(`MIN_UPDATE_GAP_HOURS`, `MAX_UPDATE_GAP_HOURS` in `alerts.py`).
 
 - `evaluate()` works out WATCH/WARNING for every district and remembers the
   count in `data/alert_state.json`. Only real, freshly downloaded forecasts
@@ -261,6 +279,38 @@ Any update where it is no longer risky                      → reset
   `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`,
   optionally `TWILIO_WHATSAPP_FROM`). Without them, messages are only
   written to `data/alert_log.csv`. You can see them via **Log** in the left panel.
+
+---
+
+## 8b. The web API (`api.py`)
+
+**What it is.** FastAPI turns Python functions into web addresses (URLs) that
+return JSON. Any program – a React website, a phone app, another government
+system – can ask it for the heat data without running the desktop app.
+
+```bash
+python api.py          # then open http://127.0.0.1:8000/docs
+```
+
+`/docs` is an automatic page listing every endpoint, with a "Try it out" button.
+
+| Endpoint | Returns |
+|---|---|
+| `GET /districts` | All districts, most urgent first |
+| `GET /districts/{name}` | One district: now, 5-day forecast, IMD code, alert, actions |
+| `GET /alerts` | Current WATCH / WARNING list |
+| `GET /alerts/log` | Sent/logged alerts (needs `X-API-Key` if `HEAT_API_KEY` is set) |
+| `POST /refresh` | Download fresh weather now (same key rule) |
+| `GET /replays` | Past heat waves; add `?replay=2024-04-30` to the calls above |
+| `GET /geojson` | District boundaries for a web map |
+| `GET /health` | Is it running, when was it last computed |
+
+- **APScheduler** runs `refresh_live()` straight away and then every hour:
+  recompute, update WATCH/WARNING, send newly confirmed warnings.
+- It uses `service.compute_all()`, the same function the desktop app uses, so
+  both always agree.
+- Run the desktop app **or** the API as the alerting service, not both: they
+  share `data/alert_state.json`.
 
 ---
 
@@ -305,7 +355,7 @@ You only need three ideas to read the UI files:
 | The four coloured number cards | `MetricCard` |
 | 5-day line chart | `TrendChart` (drawn by hand with `QPainter`) |
 | One row per forecast day | `ForecastRow` |
-| Alert status + suggested actions | `ActionsCard` and `suggested_actions()` |
+| Alert status + suggested actions | `ActionsCard` (text from `suggested_actions()` in `alerts.py`) |
 | Population box | `CensusCard` |
 | Map and hover card | `TamilNaduMap` in `map_view.py` |
 | Sign-in / New account / Manage Access | `LoginDialog`, `AdminUserDialog`, `AccessManagerDialog` in `login.py` |
@@ -334,6 +384,19 @@ set_base_style(label, "color:$muted; background:$surface; font-size:15px;")
 `set_base_style(...)` and `$tokens`, never `widget.setStyleSheet(...)`
 with fixed colours. Otherwise it won't follow dark mode or text size.
 
+### Screen sizes
+
+- `main()` tells Qt to follow Windows scaling exactly (`PassThrough`), so 150 %
+  stays 150 % instead of being rounded to 200 %.
+- `MainWindow.apply_breakpoints()` runs on every resize. Below `COMPACT_WIDTH`
+  it hides the subtitle and map hint, shortens the theme button and name badge,
+  and narrows the right panel. Below `NARROW_WIDTH` it collapses the side panel
+  and hides the name badge.
+- Dialogs use `fit_to_screen()` (`ui_controls.py`) so they never open bigger
+  than the screen; long forms scroll.
+- The "?" button Windows adds to dialogs is turned off
+  (`AA_DisableWindowContextHelpButton`).
+
 ### Text size
 
 Font sizes are constants (`FS_SMALL = 13`, `FS_BODY = 15`, …). The A−/A+
@@ -357,8 +420,12 @@ multiplied by it. For sizes in drawing code, use `scaled(px)`.
 | Change the risk band cut-offs | `risk_band()` in `thermal.py` |
 | Change how much duration matters | `combined_thermal_score()` and `DURATION_FULL_HOURS` in `thermal.py` |
 | Change the heat vs population weighting | `relative_risk_score()` in `thermal.py` |
-| Change the suggested actions text | `suggested_actions()` in `panels.py` |
+| Change the suggested actions text | `suggested_actions()` in `alerts.py` (used by the app, SMS and API) |
+| Add an API endpoint | a new `@app.get(...)` function in `api.py` |
 | Warn after 3 updates instead of 2 | `CONFIRM_UPDATES` in `alerts.py` |
+| Change how far apart updates must be | `MIN_UPDATE_GAP_HOURS` / `MAX_UPDATE_GAP_HOURS` in `alerts.py` |
+| Add another replay event | `REPLAY_EVENTS` in `config.py` (start date, label) |
+| Change when the layout gets compact | `COMPACT_WIDTH`, `NARROW_WIDTH`, `RIGHT_PANEL_*` in `config.py` |
 | Change the heat-wave thresholds or colour rules | constants and `district_code()` in `heatwave.py` |
 | Mark a district as coastal / hills | `COASTAL` / `HILLS` in `heatwave.py` |
 | Refresh weather more/less often | `WEATHER_CACHE_MINUTES` in `config.py` |
@@ -380,7 +447,8 @@ multiplied by it. For sizes in drawing code, use `scaled(px)`.
 | **Relative risk** | 0–100: thermal score (70%) + population exposure (30%) |
 | **Danger range** | Heat index ≥ 39.4°C or UTCI ≥ 38°C |
 | **Heat wave (IMD)** | Tmax well above the local normal (see §8); colour YELLOW / ORANGE / RED |
-| **WATCH / WARNING** | IMD heat wave seen in 1 update / confirmed in 2 updates in a row |
+| **WATCH / WARNING** | IMD heat wave seen in 1 update / confirmed in 2 updates in a row (≥ 6 h apart) |
+| **Replay** | Archived weather for a past heat wave, shown as if it were the forecast |
 | **Priority score** | Used to rank which districts need attention first |
 | **GeoJSON** | A text file format for map shapes |
 | **Thread / worker** | Code running in the background so the window stays responsive |

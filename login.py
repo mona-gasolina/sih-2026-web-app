@@ -10,7 +10,7 @@ from config import (
     APP_TITLE, APP_VERSION, TEMP_GRADIENT_STOPS, FS_SMALL, FS_LABEL, FS_BODY, FS_HEADING,
     FS_BRAND, FS_TITLE, set_base_style,
 )
-from ui_controls import PasswordField, TextSizeControl, ThemeToggle, caps_lock_on
+from ui_controls import PasswordField, TextSizeControl, ThemeToggle, caps_lock_on, fit_to_screen
 
 # ---------------------------------------------------------------------------
 # Shared form styling ($tokens are filled from the active light/dark theme)
@@ -81,6 +81,27 @@ def _label(text, name="label"):
     return label
 
 
+def _scroll_shell(dialog, margins):
+    """Scrollable body + fixed footer, so a dialog still works on a small screen."""
+    shell = QVBoxLayout(dialog)
+    shell.setContentsMargins(0, 0, 0, 0)
+    shell.setSpacing(0)
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.NoFrame)
+    inner = QWidget()
+    inner.setObjectName("dialogBody")
+    set_base_style(inner, "QWidget#dialogBody { background:$bg; }")
+    body = QVBoxLayout(inner)
+    body.setContentsMargins(*margins)
+    scroll.setWidget(inner)
+    shell.addWidget(scroll, 1)
+    footer = QHBoxLayout()
+    footer.setContentsMargins(margins[0], 10, margins[2], margins[3])
+    shell.addLayout(footer)
+    return body, footer
+
+
 def _field(caption, widget, hint=None):
     box = QVBoxLayout()
     box.setSpacing(6)
@@ -138,8 +159,8 @@ class BrandPanel(QFrame):
 
         for heading, text in (
             ("Human thermal stress", "Temperature, humidity, wind and sun combined into one index."),
-            ("Hyperlocal risk maps", "Colour-coded areas with 5-day outlooks and drill-down."),
-            ("Confirmed alerts", "Warnings only when risk persists across forecast updates."),
+            ("District risk maps", "Colour-coded districts with 5-day outlooks and drill-down; ward-ready."),
+            ("Confirmed alerts", "IMD heat-wave criteria, sent only when forecast updates agree."),
         ):
             row = QVBoxLayout()
             row.setSpacing(2)
@@ -173,8 +194,8 @@ class LoginDialog(QDialog):
         self.auth = auth_manager
         self.user = None
         self.setWindowTitle("Heat Intelligence – Sign in")
-        self.setMinimumSize(900, 620)
-        self.resize(1120, 760)
+        self.setMinimumSize(420, 420)
+        fit_to_screen(self, 1120, 760)
         set_base_style(self, FORM_STYLE)
 
         # Scrolls instead of clipping when a large text size is chosen.
@@ -192,7 +213,8 @@ class LoginDialog(QDialog):
         outer = QHBoxLayout(inner)
         outer.setContentsMargins(24, 24, 24, 24)
         outer.setSpacing(24)
-        outer.addWidget(BrandPanel(), 5)
+        self.brand = BrandPanel()
+        outer.addWidget(self.brand, 5)
 
         right = QVBoxLayout()
         right.setSpacing(16)
@@ -273,6 +295,10 @@ class LoginDialog(QDialog):
         self._caps_timer.timeout.connect(self._update_caps)
         self._caps_timer.start(400)
         self.username.setFocus()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.brand.setVisible(self.width() >= 860)      # small screens: sign-in form only
 
     def eventFilter(self, obj, event):
         if obj is self.password and event.type() in (QEvent.FocusIn, QEvent.FocusOut, QEvent.KeyRelease):
@@ -356,11 +382,11 @@ class AdminUserDialog(QDialog):
         super().__init__(parent)
         self.auth = auth_manager
         self.setWindowTitle("New City Administrator Account")
-        self.setMinimumWidth(820)
+        self.setMinimumSize(480, 400)
+        fit_to_screen(self, 860, 780)
         set_base_style(self, FORM_STYLE)
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(32, 28, 32, 28)
+        outer, buttons = _scroll_shell(self, (32, 28, 32, 20))
         outer.setSpacing(10)
         outer.addWidget(_label("New city administrator", "heading"))
         note = _label("Creates an assigned login for an authorised officer. Heat alerts for the "
@@ -410,8 +436,8 @@ class AdminUserDialog(QDialog):
         self.error.hide()
         outer.addSpacing(6)
         outer.addWidget(self.error)
+        outer.addStretch(1)
 
-        buttons = QHBoxLayout()
         buttons.addStretch()
         cancel = QPushButton("Cancel")
         cancel.setObjectName("secondary")
@@ -422,8 +448,6 @@ class AdminUserDialog(QDialog):
         create.clicked.connect(self.create)
         buttons.addWidget(cancel)
         buttons.addWidget(create)
-        outer.addSpacing(6)
-        outer.addLayout(buttons)
 
     def _fail(self, message):
         self.error.setText(message)
@@ -505,7 +529,8 @@ class AccessManagerDialog(QDialog):
         self.auth = auth_manager
         self.districts = districts or []
         self.setWindowTitle("Manage Access")
-        self.setMinimumSize(1080, 620)
+        self.setMinimumSize(600, 400)
+        fit_to_screen(self, 1120, 660)
         set_base_style(self, FORM_STYLE)
 
         layout = QVBoxLayout(self)
@@ -532,7 +557,10 @@ class AccessManagerDialog(QDialog):
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setShowGrid(False)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setWordWrap(False)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.Stretch)     # name takes the spare width
         self.table.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.table.itemSelectionChanged.connect(self._sync_buttons)
         layout.addWidget(self.table, 1)

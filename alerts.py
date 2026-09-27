@@ -12,7 +12,13 @@ Rule (prototype):
   • 1st update at risk  → WATCH   (not yet confirmed, nothing is sent)
   • ≥2 consecutive updates at risk → WARNING (confirmed) → dispatched once
     to the city administrators assigned to that district.
-  • One update not at risk resets the streak.
+  • An "update" only counts if it is at least MIN_UPDATE_GAP_HOURS after the
+    previous one: the app re-downloads hourly, but the weather models behind
+    Open-Meteo publish a new run about every 6 h, so two downloads an hour
+    apart are usually the same forecast and would not be a real confirmation.
+  • One update not at risk resets the streak; so does a gap longer than
+    MAX_UPDATE_GAP_HOURS (the updates were not consecutive).
+  • Replay (archived weather) shows the levels but never sends or stores anything.
 
 Dispatch: Twilio REST API when these environment variables are set –
   TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM (SMS number) and/or
@@ -32,6 +38,8 @@ from config import ALERT_STATE_FILE, ALERT_LOG_FILE, DATA_DIR
 from heatwave import code_index
 
 CONFIRM_UPDATES = 2
+MIN_UPDATE_GAP_HOURS = 6
+MAX_UPDATE_GAP_HOURS = 36
 
 
 def _load_state():
@@ -56,6 +64,7 @@ def evaluate(zone_metrics, weather_info):
     Returns (alerts list sorted by severity, newly confirmed list).
     Only real, freshly fetched forecasts advance the persistence counter.
     """
+    replay = bool(weather_info.get("replay"))
     persist = weather_info.get("source", "").startswith("Open-Meteo")
     state = _load_state() if persist else {}
     fetched_at = weather_info.get("fetched_at", 0)
@@ -67,16 +76,29 @@ def evaluate(zone_metrics, weather_info):
         entry = state.get(name, {"streak": 0, "last_update": 0, "dispatched": False})
 
         if persist and weather_info.get("fresh") and entry.get("last_update") != fetched_at:
-            entry["streak"] = entry.get("streak", 0) + 1 if risky else 0
-            entry["last_update"] = fetched_at
+            gap_hours = (fetched_at - entry.get("last_update", 0)) / 3600.0
             if not risky:
-                entry["dispatched"] = False
+                entry.update(streak=0, last_update=fetched_at, dispatched=False)
+            elif entry.get("streak", 0) == 0 or gap_hours > MAX_UPDATE_GAP_HOURS:
+                entry.update(streak=1, last_update=fetched_at, dispatched=False)
+            elif gap_hours >= MIN_UPDATE_GAP_HOURS:
+                entry.update(streak=entry["streak"] + 1, last_update=fetched_at)
+            # else: same model run downloaded again – not a new update
         streak = entry.get("streak", 0) if persist else (1 if risky else 0)
         if persist and risky and streak == 0:
             streak = 1          # first time we see it (e.g. loaded from cache)
 
         if risky:
-            level = "WARNING" if streak >= CONFIRM_UPDATES else "WATCH"
+            if replay:
+                level, confidence = "WARNING", "Replay of archived weather – shown as confirmed, nothing is sent"
+            elif streak >= CONFIRM_UPDATES:
+                level = "WARNING"
+                confidence = (f"Confirmed in {streak} consecutive forecast updates "
+                              f"(≥ {MIN_UPDATE_GAP_HOURS} h apart)")
+            else:
+                level = "WATCH"
+                confidence = (f"Seen in 1 forecast update – confirmed if the next update "
+                              f"(≥ {MIN_UPDATE_GAP_HOURS} h later) agrees")
             peak = imd["peak_day"]
             alert = {
                 "district": name,
@@ -91,11 +113,7 @@ def evaluate(zone_metrics, weather_info):
                 "hours_danger": peak["hours_danger"],
                 "score": m.get("risk_score", 0),
                 "streak": streak,
-                "confidence": (
-                    f"Confirmed in {streak} consecutive forecast updates"
-                    if level == "WARNING" else
-                    "Seen in 1 forecast update – waiting for confirmation"
-                ),
+                "confidence": confidence,
             }
             alerts.append(alert)
             if level == "WARNING" and persist and not entry.get("dispatched"):
@@ -107,6 +125,33 @@ def evaluate(zone_metrics, weather_info):
         _save_state(state)
     alerts.sort(key=lambda a: (a["level"] != "WARNING", -code_index(a["colour"]), -a["score"]))
     return alerts, newly_confirmed
+
+
+HIGH_STRESS_BANDS = ("HIGH", "EXTREME")
+
+
+def suggested_actions(m):
+    """Warning level from the IMD heat-wave code; day-to-day advice from UTCI stress."""
+    code = m.get("imd", {}).get("code", "GREEN")
+    if code in ("RED", "ORANGE"):
+        return [
+            "Activate the Heat Action Plan for this area.",
+            "Open cooling centres and drinking-water points.",
+            "Shift outdoor work away from 12 pm – 4 pm.",
+            "Alert hospitals / PHCs; check on elderly people living alone.",
+        ]
+    if code == "YELLOW":
+        return [
+            "Issue a public heat advisory (SMS, radio, local TV).",
+            "Prepare cooling centres and water points.",
+            "Ask employers of outdoor workers to plan shade and rest breaks.",
+        ]
+    if m.get("peak_band") in HIGH_STRESS_BANDS:
+        return [
+            "No heat wave forecast, but outdoor heat stress is high: share hydration and shade guidance.",
+            "Remind employers of outdoor workers about rest breaks in the afternoon.",
+        ]
+    return ["Routine monitoring – no action needed right now."]
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +213,8 @@ def dispatch(alert, recipients, actions):
     results = []
     targets = [r for r in recipients if r.get("mobile")]
     if not targets:
-        results.append(("No officer with a mobile number is assigned", "—", "LOGGED ONLY"))
+        results.append(("No officer with a mobile number is assigned to this district", "—",
+                        "NOT SENT – logged only"))
     for r in targets:
         label = f"{r.get('full_name') or r['username']} ({_mask(r['mobile'])})"
         if not channels:

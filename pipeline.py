@@ -14,10 +14,10 @@ HIGH_BANDS = ("HIGH", "EXTREME")
 DEFAULT_CAPACITY = 50.0
 
 
-def _date_text(date_str, index):
-    if index == 0:
+def _date_text(date_str, index, relative=True):
+    if relative and index == 0:
         return "Today"
-    if index == 1:
+    if relative and index == 1:
         return "Tomorrow"
     try:
         return datetime.strptime(date_str, "%Y-%m-%d").strftime("%a %d %b")
@@ -33,14 +33,15 @@ def _longest_run(bands):
     return best
 
 
-def compute_zone(name, data, demographic, capacity=None, normals=None):
+def compute_zone(name, data, demographic, capacity=None, normals=None, replay=None):
     """
     data: normalised weather for one district (weather.normalize output)
     normals: 365 daily Tmax normals for the district (weather.get_tmax_normals)
+    replay: start date (YYYY-MM-DD) when replaying archived weather, else None
     Returns the full metrics dict for that district.
     """
     kind = heatwave.terrain(name)
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = replay or datetime.now().strftime("%Y-%m-%d")
     days = [d for d in data["days"] if d["date"] >= today][:5] or data["days"][:5]
 
     forecast = []
@@ -48,7 +49,7 @@ def compute_zone(name, data, demographic, capacity=None, normals=None):
         summary = summarise_day(day["hours"])
         if summary is None:
             continue
-        summary.update({"date": day["date"], "date_text": _date_text(day["date"], i)})
+        summary.update({"date": day["date"], "date_text": _date_text(day["date"], i, relative=not replay)})
         summary.pop("hourly_stress", None)
         normal = heatwave.normal_for(normals, day["date"])
         level, departure = heatwave.classify_day(summary["temp_max"], normal, kind)

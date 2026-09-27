@@ -8,6 +8,8 @@ Weather data: Open-Meteo (free, no API key).
   duration of dangerous exposure can be measured.
 • Responses are cached on disk for WEATHER_CACHE_MINUTES (1 hour) – the
   "cache weather data and refresh every hour" strategy from the PDF.
+• Replay: archived weather for a past heat wave (get_replay_weather), so the
+  warning flow can be demonstrated outside the heat season.
 """
 import json
 import math
@@ -110,11 +112,14 @@ def save_cache(payloads):
         pass
 
 
-def get_weather(locations, force=False):
+def get_weather(locations, force=False, replay=None):
     """
     Returns (normalised {name: data}, info dict).
-    info = {"source": "Open-Meteo" | "Open-Meteo (cached)" | "DEMO", "fetched_at": epoch, "fresh": bool, "error": str}
+    info = {"source": "Open-Meteo" | "Open-Meteo (cached)" | "DEMO" | "REPLAY …", "fetched_at": epoch,
+            "fresh": bool, "error": str, "replay": start date or None}
     """
+    if replay:
+        return get_replay_weather(locations, replay)
     names = [n for n, _, _ in locations]
     if not force:
         cache = load_cache(names)
@@ -135,6 +140,62 @@ def get_weather(locations, force=False):
                      "fresh": False, "error": str(exc)})
         return ({n: demo_weather(i) for i, n in enumerate(names)},
                 {"source": "DEMO", "fetched_at": time.time(), "fresh": False, "error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# Replay of a past period (archived weather)
+# ---------------------------------------------------------------------------
+REPLAY_HOUR = 15          # "current" conditions in a replay = 3 pm on the first day
+
+
+def get_replay_weather(locations, start, days=FORECAST_DAYS):
+    """
+    Archived hourly weather for `days` days from `start` (YYYY-MM-DD), shaped like a
+    live forecast. Saved to data/replay_<start>.json on first use (the archive does
+    not change), so a replay also works offline once it has been opened.
+    """
+    names = [n for n, _, _ in locations]
+    path = DATA_DIR / f"replay_{start}.json"
+    info = {"source": f"REPLAY {start}", "fetched_at": time.time(), "fresh": False, "error": "", "replay": start}
+    try:
+        cache = json.loads(path.read_text(encoding="utf-8"))
+        if sorted(cache.get("names", [])) == sorted(names):
+            return {n: _replay_normalize(p) for n, p in cache["payloads"].items()}, info
+    except Exception:
+        pass
+    end = (datetime.strptime(start, "%Y-%m-%d") + timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    try:
+        data = _request({
+            "latitude": ",".join(f"{lat:.4f}" for _, lat, _ in locations),
+            "longitude": ",".join(f"{lon:.4f}" for _, _, lon in locations),
+            "start_date": start, "end_date": end,
+            "timezone": "Asia/Kolkata",
+            "hourly": ",".join(HOURLY_VARS),
+        }, base_url=NORMALS_URL, timeout=90)
+        if isinstance(data, dict):
+            data = [data]
+        if len(data) != len(locations):
+            raise RuntimeError("Unexpected number of locations in replay response")
+        payloads = {name: payload for name, payload in zip(names, data)}
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"start": start, "names": names, "payloads": payloads}), encoding="utf-8")
+        except Exception:
+            pass
+        return {n: _replay_normalize(p) for n, p in payloads.items()}, info
+    except Exception as exc:
+        # No archive and no internet: nothing honest to show, so say so.
+        info["error"] = f"Replay data could not be downloaded: {exc}"
+        return {}, info
+
+
+def _replay_normalize(payload):
+    data = normalize(payload)
+    first = data["days"][0]["hours"] if data["days"] else []
+    if first:
+        hour = dict(first[min(REPLAY_HOUR, len(first) - 1)])
+        data["current"] = hour
+    return data
 
 
 # ---------------------------------------------------------------------------
