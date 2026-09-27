@@ -14,8 +14,8 @@ import alerts as alert_engine
 from auth import AuthManager
 from config import (
     APP_TITLE, APP_SHORT, APP_VERSION, STATE_NAME, WINDOW_HEIGHT, WINDOW_WIDTH,
-    MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, COMPACT_WIDTH, NARROW_WIDTH,
-    LEFT_PANEL_WIDTH, RIGHT_PANEL_WIDTH, RIGHT_PANEL_COMPACT, RIGHT_PANEL_NARROW,
+    MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, COMPACT_WIDTH, NARROW_WIDTH, SHORT_HEIGHT,
+    LEFT_PANEL_WIDTH, LEFT_PANEL_COMPACT, RIGHT_PANEL_WIDTH, RIGHT_PANEL_COMPACT, RIGHT_PANEL_NARROW,
     REPLAY_EVENTS, WEATHER_CACHE_MINUTES, FONT_FAMILY,
     FS_SMALL, FS_LABEL, FS_BODY, FS_HEADING, FS_TITLE, FS_BRAND, FS_VALUE,
     FONT_SCALE_STEP, TEMP_GRADIENT_STOPS, RISK_GRADIENT_STOPS,
@@ -187,10 +187,9 @@ class KpiTile(QFrame):
         self.caption = QLabel(caption.upper())
         self.value = QLabel("—")
         self.sub = QLabel("Loading…")
-        self.caption.setWordWrap(True)
         self.sub.setWordWrap(True)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setContentsMargins(14, 10, 12, 10)
         layout.setSpacing(2)
         layout.addWidget(self.caption)
         layout.addWidget(self.value)
@@ -221,6 +220,7 @@ class CollapsiblePanel(QFrame):
     def __init__(self, title, parent=None):
         super().__init__(parent)
         self.expanded = True
+        self.base_width = LEFT_PANEL_WIDTH
         self.setObjectName("leftPanel")
         set_base_style(self, "QFrame#leftPanel { background:$surface; border-right:1px solid $border; }"
                              "QWidget#leftBody { background:$surface; }"
@@ -252,14 +252,14 @@ class CollapsiblePanel(QFrame):
         self.body = QWidget()
         self.body.setObjectName("leftBody")
         self.body_layout = QVBoxLayout(self.body)
-        self.body_layout.setContentsMargins(0, 8, 6, 0)
+        self.body_layout.setContentsMargins(0, 8, 10, 0)
         self.body_layout.setSpacing(12)
         self.scroll.setWidget(self.body)
         layout.addWidget(self.scroll, 1)
         self.apply_width()
 
     def expanded_width(self):
-        return int(LEFT_PANEL_WIDTH * (1 + (font_scale() - 1) * 0.7))
+        return int(self.base_width * (1 + (font_scale() - 1) * 0.7))
 
     def apply_width(self):
         self.setFixedWidth(self.expanded_width() if self.expanded else self.COLLAPSED_WIDTH)
@@ -277,6 +277,59 @@ class CollapsiblePanel(QFrame):
 def section_label(text):
     label = QLabel(text)
     set_base_style(label, f"font-size:{FS_LABEL}px;font-weight:800;color:$muted;")
+    return label
+
+
+class Page(QWidget):
+    """Dashboard page. Wrapped labels must not make the scroll area think the
+    page needs more height than its minimum, or the whole page scrolls."""
+
+    def heightForWidth(self, width):
+        return -1
+
+
+class ElidedLabel(QLabel):
+    """One-line label that shortens itself with "…"; the full text is the tooltip."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.full_text = ""
+        self.setMinimumWidth(1)
+
+    def set_full_text(self, text):
+        self.full_text = text
+        self.setToolTip(text)
+        self._refresh()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._refresh()
+
+    def on_theme_changed(self):
+        self._refresh()
+
+    def _refresh(self):
+        room = max(10, self.contentsRect().width())
+        self.setText(self.fontMetrics().elidedText(self.full_text, Qt.ElideRight, room))
+
+
+def make_combo(parent_style=None):
+    """Combo box that can shrink (long items are shortened) instead of widening its panel."""
+    combo = QComboBox()
+    combo.setCursor(Qt.PointingHandCursor)
+    combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+    combo.setMinimumContentsLength(8)
+    set_base_style(combo, parent_style or COMBO_STYLE)
+    return combo
+
+
+def info_label(text, details):
+    """Short muted line with an ⓘ; the explanation is shown on hover."""
+    label = QLabel(f"ⓘ  {text}")
+    label.setWordWrap(True)
+    label.setToolTip(details)
+    label.setCursor(Qt.WhatsThisCursor)
+    set_base_style(label, f"font-size:{FS_SMALL}px;color:$subtle;")
     return label
 
 
@@ -405,7 +458,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ layout
     def build_ui(self):
-        self.page = QWidget()
+        self.page = Page()
         self.page.setObjectName("page")
         set_base_style(self.page, "QWidget#page { background:$bg; }")
         root = QVBoxLayout(self.page)
@@ -422,9 +475,8 @@ class MainWindow(QMainWindow):
         row.addWidget(self.detail)
         root.addLayout(row, 1)
 
-        self.status = QLabel()
+        self.status = ElidedLabel()
         self.status.setAlignment(Qt.AlignCenter)
-        self.status.setWordWrap(True)
         set_base_style(self.status, f"background:$statusBg;color:$statusText;font-size:{FS_SMALL}px;padding:9px 16px;")
         root.addWidget(self.status)
         self._update_status()
@@ -501,22 +553,19 @@ class MainWindow(QMainWindow):
         body = self.left.body_layout
 
         body.addWidget(section_label("MAP LAYER"))
-        self.color_mode = QComboBox()
+        self.color_mode = make_combo()
         self.color_mode.addItems(["Temperature", "Today's risk"])
-        self.color_mode.setCursor(Qt.PointingHandCursor)
-        set_base_style(self.color_mode, COMBO_STYLE)
         self.color_mode.currentTextChanged.connect(self.change_map_mode)
         body.addWidget(self.color_mode)
 
         body.addWidget(section_label("WEATHER DATA"))
-        self.source_mode = QComboBox()
-        self.source_mode.addItem("Live forecast (next 5 days)", None)
+        self.source_mode = make_combo()
+        self.source_mode.addItem("Live forecast", None)
         for start, label in REPLAY_EVENTS:
-            self.source_mode.addItem(f"Replay: {label}", start)
-        self.source_mode.setCursor(Qt.PointingHandCursor)
-        self.source_mode.setToolTip("Replay shows archived weather for a real past heat wave, so the "
-                                    "warning flow can be demonstrated outside the heat season.")
-        set_base_style(self.source_mode, COMBO_STYLE)
+            self.source_mode.addItem(f"Replay: {start[:4]} heat wave", start)
+            self.source_mode.setItemData(self.source_mode.count() - 1, label, Qt.ToolTipRole)
+        self.source_mode.setToolTip("Live = next 5 days. Replay = archived weather for a real past heat "
+                                    "wave, to show the warning flow outside the heat season.")
         self.source_mode.currentIndexChanged.connect(self.change_source)
         body.addWidget(self.source_mode)
 
@@ -524,11 +573,12 @@ class MainWindow(QMainWindow):
         head = QHBoxLayout()
         head.addWidget(section_label("HEAT ALERTS"))
         head.addStretch()
-        log_btn = QPushButton("Log")
+        log_btn = QPushButton("View log")
         log_btn.setCursor(Qt.PointingHandCursor)
-        log_btn.setToolTip("Show alerts that have been sent")
-        set_base_style(log_btn, f"QPushButton {{ background:transparent;color:$focus;border:none;"
-                                f"font-size:{FS_SMALL}px;font-weight:800;padding:2px 4px; }}")
+        log_btn.setToolTip("Alerts that have been sent or logged")
+        set_base_style(log_btn, f"QPushButton {{ background:$chip;color:$text;border:1px solid $border;"
+                                f"border-radius:8px;font-size:{FS_SMALL}px;font-weight:800;padding:4px 10px; }}"
+                                f"QPushButton:hover {{ border-color:$borderStrong; }}")
         log_btn.clicked.connect(lambda: AlertLogDialog(self).exec_())
         head.addWidget(log_btn)
         body.addLayout(head)
@@ -544,10 +594,12 @@ class MainWindow(QMainWindow):
                            f"QPushButton:hover {{ background:$primaryHover; }}")
             self.notify_btn.clicked.connect(self.notify_officers)
             body.addWidget(self.notify_btn)
-        body.addWidget(muted_label(
+        body.addWidget(info_label(
+            "How alerts work",
             "Alerts follow the IMD heat-wave criteria (max temperature vs the local normal), coloured "
-            "YELLOW / ORANGE / RED. WATCH = seen in one forecast update. WARNING = confirmed in "
-            f"{alert_engine.CONFIRM_UPDATES} consecutive updates; officers are notified automatically."
+            "YELLOW / ORANGE / RED.\nWATCH = seen in one forecast update.\nWARNING = confirmed in "
+            f"{alert_engine.CONFIRM_UPDATES} updates at least {alert_engine.MIN_UPDATE_GAP_HOURS} h apart; "
+            "officers are notified automatically."
         ))
 
         body.addSpacing(4)
@@ -555,16 +607,12 @@ class MainWindow(QMainWindow):
         self.priority_box = QVBoxLayout()
         self.priority_box.setSpacing(6)
         body.addLayout(self.priority_box)
-        body.addWidget(muted_label(
-            "Ranked by relative risk over the next 3 days, hours of dangerous heat and "
-            + ("response capacity." if self.capacities else
-               "response capacity (add data/response_capacity.csv to include it).")
-        ))
-
-        body.addSpacing(4)
-        body.addWidget(muted_label(
-            "Prototype uses district boundaries. Production will use ward / zone boundaries "
-            "for hyperlocal risk."
+        body.addWidget(info_label(
+            "How districts are ranked",
+            "Ranked by IMD heat-wave code, then relative risk over the next 3 days, hours of dangerous "
+            "heat and " + ("response capacity." if self.capacities else
+                           "response capacity (add data/response_capacity.csv to include it).")
+            + "\nPrototype uses district boundaries; production will use ward / zone boundaries."
         ))
         body.addStretch()
         return self.left
@@ -579,10 +627,10 @@ class MainWindow(QMainWindow):
 
         kpis = QHBoxLayout()
         kpis.setSpacing(12)
-        self.kpi_high = KpiTile("Heat-wave districts")
+        self.kpi_high = KpiTile("Heat waves")
         self.kpi_hot = KpiTile("Hottest now")
         self.kpi_feels = KpiTile("Peak feels-like")
-        self.kpi_pop = KpiTile("Population exposed")
+        self.kpi_pop = KpiTile("People exposed")
         self.kpi_alerts = KpiTile("Alerts")
         for tile in (self.kpi_high, self.kpi_hot, self.kpi_feels, self.kpi_pop, self.kpi_alerts):
             kpis.addWidget(tile, 1)
@@ -596,7 +644,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.replay_banner)
 
         header = QHBoxLayout()
-        title = QLabel(f"{STATE_NAME}  •  Heat Risk Map")
+        self.map_title = title = QLabel(f"{STATE_NAME}  •  Heat Risk Map")
         set_base_style(title, f"font-size:{FS_TITLE}px;font-weight:800;color:$text;")
         self.map_hint = hint = QLabel("Point at a district for quick data  •  Click for full details")
         hint.setWordWrap(True)
@@ -615,10 +663,8 @@ class MainWindow(QMainWindow):
         selector = QVBoxLayout()
         selector.setSpacing(6)
         selector.addWidget(section_label("DISTRICT"))
-        self.combo = QComboBox()
-        self.combo.setCursor(Qt.PointingHandCursor)
+        self.combo = make_combo()
         self.combo.setMinimumWidth(200)
-        set_base_style(self.combo, COMBO_STYLE)
         self.combo.currentTextChanged.connect(self.select_from_combo)
         selector.addWidget(self.combo)
         bottom.addLayout(selector)
@@ -663,6 +709,9 @@ class MainWindow(QMainWindow):
             self.theme_toggle.set_compact(compact)
             self.size_control.set_compact(compact)
             self.badge.setText(self.badge_short if compact else self.badge_full)
+        self.left.base_width = LEFT_PANEL_COMPACT if compact else LEFT_PANEL_WIDTH
+        self.left.apply_width()
+        self.map_title.setVisible(self.height() >= SHORT_HEIGHT)   # short screens: map needs the room
         base = RIGHT_PANEL_NARROW if narrow else RIGHT_PANEL_COMPACT if compact else RIGHT_PANEL_WIDTH
         self.detail.setFixedWidth(int(base * (1 + (font_scale() - 1) * 0.6)))
 
@@ -742,9 +791,10 @@ class MainWindow(QMainWindow):
             label = dict(REPLAY_EVENTS).get(self.replay, self.replay)
             text = f"REPLAY – archived weather\n{label}"
             self.replay_banner.setText(
-                f"Replay mode: archived weather for {label}, shown as if it were the forecast. "
-                "Not live data – nothing is sent to officers. "
-                + (f"({info['error']})" if info.get("error") else "Switch back under WEATHER DATA."))
+                f"REPLAY – archived weather, {label}. Not live data; nothing is sent to officers."
+                + (f" ({info['error']})" if info.get("error") else ""))
+            self.replay_banner.setToolTip("Past weather shown as if it were the forecast. "
+                                          "Switch back under WEATHER DATA in the side panel.")
         self.replay_banner.setVisible(bool(self.replay))
         self.updated_label.setText(text)
         if newly_confirmed:
@@ -762,7 +812,7 @@ class MainWindow(QMainWindow):
         high = [n for n, m in zm.items() if m["imd"]["code"] != "GREEN"]
         worst = max((zm[n]["imd"]["code"] for n in high), key=code_index, default="GREEN")
         self.kpi_high.set(f"{len(high)} / {total}",
-                          f"Next 5 days • highest IMD {worst}" if high else "None in the next 5 days",
+                          f"districts • worst IMD {worst}" if high else "districts, next 5 days",
                           risk_band_color(worst))
         hot_name, hot = max(zm.items(), key=lambda kv: kv[1]["temperature"])
         self.kpi_hot.set(f"{hot['temperature']:.1f}°C", hot_name, risk_band_color(hot["risk"]))
@@ -775,7 +825,7 @@ class MainWindow(QMainWindow):
             self.kpi_feels.set(f"{best[1]['stress']:.0f}°C", f"{best[0]} • {best[1]['date_text']}",
                                risk_band_color(best[1]["risk"]))
         pop = sum(zm[n]["demographic"].get("population", 0) for n in high)
-        self.kpi_pop.set(format_population(pop) if pop else "0", "In heat-wave districts (Census 2011)",
+        self.kpi_pop.set(format_population(pop) if pop else "0", "in heat-wave districts",
                          risk_band_color(worst if pop else "GREEN"))
         warn = sum(1 for a in self.alerts if a["level"] == "WARNING")
         watch = len(self.alerts) - warn
@@ -789,16 +839,18 @@ class MainWindow(QMainWindow):
             return
         for alert in self.alerts[:8]:
             row = ClickableRow()
-            row.row.addWidget(band_chip(alert["level"], alert["colour"]))
             text = QVBoxLayout()
             text.setSpacing(0)
             name = QLabel(alert["district"])
+            name.setWordWrap(True)
             set_base_style(name, f"font-size:{FS_BODY}px;font-weight:800;")
             when = QLabel(f"IMD {alert['colour']} • from {alert['day']}")
+            when.setWordWrap(True)
             set_base_style(when, f"font-size:{FS_SMALL}px;color:$muted;")
             text.addWidget(name)
             text.addWidget(when)
             row.row.addLayout(text, 1)
+            row.row.addWidget(band_chip(alert["level"], alert["colour"]), 0, Qt.AlignTop)
             row.clicked.connect(lambda n=alert["district"]: self.select_by_name(n))
             self.alert_box.addWidget(row)
         if len(self.alerts) > 8:
@@ -829,13 +881,12 @@ class MainWindow(QMainWindow):
 
     def _update_status(self):
         channels = alert_engine.gateway_status()
-        gateway = ", ".join(channels) if channels else "alerts logged (SMS gateway not configured)"
-        weather = ("Weather: REPLAY of archived Open-Meteo data" if self.replay else
-                   "Weather: Open-Meteo, refreshed hourly")
-        self.status.setText(
-            f"{weather}   •   Thermal engine: {engine_name()}   •   "
-            f"Heat waves: IMD criteria{'' if self.weather_info.get('normals') else ' (normals not loaded – 45 °C rule only)'}   •   "
-            f"Population: Census 2011   •   Alerts: {gateway}   •   {APP_VERSION} – prototype scores"
+        gateway = ", ".join(channels) if channels else "logged only (SMS gateway not configured)"
+        weather = "REPLAY of archived Open-Meteo data" if self.replay else "Open-Meteo, hourly"
+        self.status.set_full_text(
+            f"Weather: {weather}   •   {engine_name()}   •   "
+            f"IMD heat-wave criteria{'' if self.weather_info.get('normals') else ' (normals not loaded – 45 °C rule only)'}   •   "
+            f"Census 2011   •   Alerts: {gateway}   •   {APP_VERSION}"
         )
 
     # ------------------------------------------------------------------ selection

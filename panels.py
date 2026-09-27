@@ -40,6 +40,7 @@ class SurfaceCard(QFrame):
         self.body.setSpacing(10)
         if title:
             head = QLabel(title)
+            head.setWordWrap(True)
             set_base_style(head, f"font-size:{FS_LABEL}px;font-weight:800;color:$muted;")
             self.body.addWidget(head)
 
@@ -48,13 +49,13 @@ def kv_row(label, value, value_style=""):
     row = QHBoxLayout()
     row.setSpacing(12)
     k = QLabel(label)
+    k.setWordWrap(True)
     set_base_style(k, f"font-size:{FS_BODY}px;color:$muted;")
     v = QLabel(value)
     v.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
     v.setWordWrap(True)
     set_base_style(v, f"font-size:{FS_BODY}px;font-weight:700;color:$text;{value_style}")
-    row.addWidget(k)
-    row.addStretch(1)
+    row.addWidget(k, 1)
     row.addWidget(v)
     return row
 
@@ -79,8 +80,9 @@ class GradientCard(QFrame):
         lbl.setWordWrap(wrap)
         return lbl
 
-    def pill(self, text, size=FS_LABEL):
+    def pill(self, text, size=FS_LABEL, wrap=False):
         pill = QLabel(text)
+        pill.setWordWrap(wrap)
         set_base_style(pill, f"font-size:{size}px;font-weight:800;color:{self.text_color};"
                              f"background:{_pill_bg(self.text_color)};border-radius:8px;padding:6px 10px;")
         return pill
@@ -97,7 +99,7 @@ class HeroCard(GradientCard):
 
         top = QHBoxLayout()
         top.addWidget(self.label(name, FS_TITLE + 2, 800), 1)
-        top.addWidget(self.pill(f"HEAT STRESS: {m['risk']}"), 0, Qt.AlignTop)
+        top.addWidget(self.pill(f"HEAT STRESS: {m['risk']}", wrap=True), 0, Qt.AlignTop)
         layout.addLayout(top)
 
         row = QHBoxLayout()
