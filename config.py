@@ -65,11 +65,14 @@ MIN_WINDOW_HEIGHT = 480
 COMPACT_WIDTH = 1600              # below this: slimmer top bar and right panel
 SHORT_HEIGHT = 720                # below this: map heading hidden
 NARROW_WIDTH = 1400               # below this: side panel starts collapsed, no name badge
+SMALL_WIDTH = 1200                # below this: tighter spacing, icon-only Refresh (1366 px @ 125 %)
+TINY_HEIGHT = 620                 # below this: tighter spacing and a shorter minimum map
 LEFT_PANEL_WIDTH = 330
 LEFT_PANEL_COMPACT = 290
 RIGHT_PANEL_WIDTH = 480
 RIGHT_PANEL_COMPACT = 420
 RIGHT_PANEL_NARROW = 380
+RIGHT_PANEL_SMALL = 320
 
 # ---------------------------------------------------------------------------
 # Typography – sized for older users (nothing below 13px at 100%)

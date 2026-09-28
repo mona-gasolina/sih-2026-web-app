@@ -14,8 +14,9 @@ import alerts as alert_engine
 from auth import AuthManager
 from config import (
     APP_TITLE, APP_SHORT, APP_VERSION, STATE_NAME, WINDOW_HEIGHT, WINDOW_WIDTH,
-    MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, COMPACT_WIDTH, NARROW_WIDTH, SHORT_HEIGHT,
+    MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, COMPACT_WIDTH, NARROW_WIDTH, SMALL_WIDTH, SHORT_HEIGHT, TINY_HEIGHT,
     LEFT_PANEL_WIDTH, LEFT_PANEL_COMPACT, RIGHT_PANEL_WIDTH, RIGHT_PANEL_COMPACT, RIGHT_PANEL_NARROW,
+    RIGHT_PANEL_SMALL,
     REPLAY_EVENTS, WEATHER_CACHE_MINUTES, FONT_FAMILY,
     FS_SMALL, FS_LABEL, FS_BODY, FS_HEADING, FS_TITLE, FS_BRAND, FS_VALUE,
     FONT_SCALE_STEP, TEMP_GRADIENT_STOPS, RISK_GRADIENT_STOPS,
@@ -183,7 +184,8 @@ class KpiTile(QFrame):
         super().__init__(parent)
         self.setObjectName("kpi")
         self._accent = "#94A3B8"
-        self.caption = QLabel(caption.upper())
+        self.caption = ElidedLabel()
+        self.caption.set_full_text(caption.upper())
         self.value = QLabel("—")
         self.sub = QLabel("Loading…")
         self.sub.setWordWrap(True)
@@ -445,7 +447,7 @@ class MainWindow(QMainWindow):
         self.capacities = load_response_capacity()
         self.zone_centroids = {}
         self.replay = None                  # start date while replaying a past heat wave
-        self._compact = self._narrow = None
+        self._compact = self._narrow = self._tight = None
 
         self.setWindowTitle(f"{APP_SHORT} • {STATE_NAME}")
         self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
@@ -494,7 +496,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.scroll)
 
     def _build_top_bar(self):
-        top = QFrame()
+        self.top_bar = top = QFrame()
         top.setObjectName("topBar")
         set_base_style(top, "QFrame#topBar { background:$surface; border-bottom:1px solid $border; }"
                             "QLabel { background:transparent; }")
@@ -545,7 +547,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(badge, 0, Qt.AlignVCenter)
 
         if self.user["role"] == "admin":
-            manage = QPushButton("Manage Access")
+            self.manage_btn = manage = QPushButton("Manage Access")
             manage.setCursor(Qt.PointingHandCursor)
             set_base_style(manage, f"QPushButton {{ background:$primary;color:$onPrimary;border:none;"
                                    f"border-radius:11px;padding:11px 16px;font-weight:700;font-size:{FS_BODY}px; }}"
@@ -634,11 +636,11 @@ class MainWindow(QMainWindow):
         centre = QFrame()
         centre.setObjectName("centre")
         set_base_style(centre, "QFrame#centre { background:$bg; } QLabel { background:transparent; }")
-        layout = QVBoxLayout(centre)
+        self.centre_layout = layout = QVBoxLayout(centre)
         layout.setContentsMargins(22, 16, 22, 14)
         layout.setSpacing(12)
 
-        kpis = QHBoxLayout()
+        self.kpi_row = kpis = QHBoxLayout()
         kpis.setSpacing(12)
         self.kpi_high = KpiTile("Heat waves")
         self.kpi_hot = KpiTile("Hottest now")
@@ -726,8 +728,27 @@ class MainWindow(QMainWindow):
         self.left.base_width = LEFT_PANEL_COMPACT if compact else LEFT_PANEL_WIDTH
         self.left.apply_width()
         self.map_title.setVisible(self.height() >= SHORT_HEIGHT)   # short screens: map needs the room
-        base = RIGHT_PANEL_NARROW if narrow else RIGHT_PANEL_COMPACT if compact else RIGHT_PANEL_WIDTH
+        small = width < SMALL_WIDTH
+        tight = (small, self.height() < TINY_HEIGHT)
+        if tight != self._tight:            # small laptops (1366 px or 1920 px at 150-175 %)
+            self._tight = tight
+            self._apply_tight(*tight)
+        base = (RIGHT_PANEL_SMALL if small else RIGHT_PANEL_NARROW if narrow
+                else RIGHT_PANEL_COMPACT if compact else RIGHT_PANEL_WIDTH)
         self.detail.setFixedWidth(int(base * (1 + (font_scale() - 1) * 0.6)))
+
+    def _apply_tight(self, small, short):
+        top = self.top_bar.layout()
+        top.setContentsMargins(*((14, 8, 14, 8) if small or short else (24, 12, 24, 12)))
+        top.setSpacing(8 if small else 14)
+        self.refresh_btn.setText("⟳" if small else "⟳  Refresh")
+        if hasattr(self, "manage_btn"):
+            self.manage_btn.setText("Access" if small else "Manage Access")
+        pad = 12 if small else 22
+        self.centre_layout.setContentsMargins(pad, *((8, pad, 8) if short else (16, pad, 14)))
+        self.centre_layout.setSpacing(8 if small or short else 12)
+        self.kpi_row.setSpacing(8 if small else 12)
+        self.map.setMinimumHeight(160 if short else 220)
 
     def after_scale_change(self):
         self.size_control.sync()
