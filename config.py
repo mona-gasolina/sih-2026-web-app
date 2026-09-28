@@ -55,24 +55,22 @@ REPLAY_EVENTS = [
 # ---------------------------------------------------------------------------
 # Window / layout
 # ---------------------------------------------------------------------------
-# Widths are in logical pixels (Windows 125 % scaling on a 1920 px screen =
-# 1536 logical px). The dashboard adapts at two breakpoints; below its
-# minimum size it scrolls instead of clipping.
-WINDOW_WIDTH = 1700
-WINDOW_HEIGHT = 980
+# Sizes are in logical pixels (Windows 125 % on a 1920 px screen = 1536 px).
+# Nothing here is tuned to one screen: side panels take a share of the window
+# width, text follows the screen size (see fit_text_to_screen) and the
+# dashboard drops optional details step by step until it fits (main.py,
+# MainWindow.fit_layout). Only below its smallest layout does the page scroll.
+WINDOW_WIDTH = 1440
+WINDOW_HEIGHT = 850
 MIN_WINDOW_WIDTH = 640
 MIN_WINDOW_HEIGHT = 480
-COMPACT_WIDTH = 1600              # below this: slimmer top bar and right panel
-SHORT_HEIGHT = 720                # below this: map heading hidden
-NARROW_WIDTH = 1400               # below this: side panel starts collapsed, no name badge
-SMALL_WIDTH = 1200                # below this: tighter spacing, icon-only Refresh (1366 px @ 125 %)
-TINY_HEIGHT = 620                 # below this: tighter spacing and a shorter minimum map
-LEFT_PANEL_WIDTH = 330
-LEFT_PANEL_COMPACT = 290
-RIGHT_PANEL_WIDTH = 480
-RIGHT_PANEL_COMPACT = 420
-RIGHT_PANEL_NARROW = 380
-RIGHT_PANEL_SMALL = 320
+LEFT_PANEL_SHARE, LEFT_PANEL_MIN, LEFT_PANEL_MAX = 0.20, 260, 380
+RIGHT_PANEL_SHARE, RIGHT_PANEL_MIN, RIGHT_PANEL_MAX = 0.27, 280, 520
+# Text is drawn at 100 % on screens between these logical sizes, smaller on
+# smaller screens (never below TEXT_FIT_MIN) and larger on bigger ones.
+TEXT_FIT_SMALL_SCREEN = (1536, 824)
+TEXT_FIT_LARGE_SCREEN = (1920, 1032)
+TEXT_FIT_MIN, TEXT_FIT_MAX = 0.88, 1.35
 
 # ---------------------------------------------------------------------------
 # Typography – sized for older users (nothing below 13px at 100%)
@@ -86,9 +84,10 @@ FS_VALUE = 28
 FS_TITLE = 24
 FS_BRAND = 24
 
-FONT_SCALE_MIN = 1.0
+FONT_SCALE_MIN = 0.7                 # A− goes down to 70 %
 FONT_SCALE_MAX = 1.6
 FONT_SCALE_STEP = 0.1
+MIN_FONT_PX = 9                      # smallest text ever drawn, even at 70 %
 
 # ---------------------------------------------------------------------------
 # Themes
@@ -326,7 +325,8 @@ def risk_band_color(band):
 # ---------------------------------------------------------------------------
 # Persistent UI settings (text size + theme)
 # ---------------------------------------------------------------------------
-_font_scale = 1.0
+_font_scale = 1.0      # the user's text-size choice (the "100%" button)
+_screen_fit = 1.0      # automatic factor for the current screen size
 
 
 def _read_settings():
@@ -374,11 +374,35 @@ def clamp_scale(scale):
 
 
 def font_scale():
+    """The user's own text-size choice."""
     return _font_scale
 
 
+def ui_scale():
+    """What text is actually drawn at: the user's choice x the screen fit."""
+    return _font_scale * _screen_fit
+
+
 def scaled(px):
-    return int(round(px * _font_scale))
+    return int(round(px * ui_scale()))
+
+
+def fit_text_to_screen(screen, root=None):
+    """Size text for this screen's usable area. Returns True if it changed."""
+    global _screen_fit
+    if screen is None:
+        return False
+    avail = screen.availableGeometry()
+    w, h = avail.width(), avail.height()
+    small = min(w / TEXT_FIT_SMALL_SCREEN[0], h / TEXT_FIT_SMALL_SCREEN[1])
+    large = min(w / TEXT_FIT_LARGE_SCREEN[0], h / TEXT_FIT_LARGE_SCREEN[1])
+    fit = small if small < 1 else large if large > 1 else 1.0
+    fit = round(max(TEXT_FIT_MIN, min(TEXT_FIT_MAX, fit)) / 0.02) * 0.02
+    if abs(fit - _screen_fit) < 0.01:
+        return False
+    _screen_fit = fit
+    restyle(root)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +417,7 @@ def render_style(stylesheet):
     colours = THEMES[_theme_name]
     styled = _TOKEN_PATTERN.sub(lambda m: colours.get(m.group(1), m.group(0)), stylesheet)
     return _FONT_PATTERN.sub(
-        lambda m: f"font-size:{max(12, round(float(m.group(1)) * _font_scale))}px",
+        lambda m: f"font-size:{max(MIN_FONT_PX, round(float(m.group(1)) * ui_scale()))}px",
         styled,
     )
 

@@ -2,26 +2,25 @@ import sys
 import time
 from datetime import datetime
 
-from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal, QRectF
+from PyQt5.QtCore import Qt, QEvent, QThread, QTimer, pyqtSignal, QRectF
 from PyQt5.QtGui import QColor, QPainter, QBrush, QLinearGradient, QFont, QFontMetrics, QKeySequence
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QDialog, QFrame, QHBoxLayout, QHeaderView,
+    QAbstractItemView, QApplication, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
     QLabel, QMainWindow, QMessageBox, QPushButton, QScrollArea, QShortcut, QTableWidget,
-    QTableWidgetItem, QToolButton, QVBoxLayout, QWidget
+    QTableWidgetItem, QToolButton, QVBoxLayout, QWidget, QMenu, QWidgetAction, QBoxLayout, QSizePolicy
 )
 
 import alerts as alert_engine
 from auth import AuthManager
 from config import (
     APP_TITLE, APP_SHORT, APP_VERSION, STATE_NAME, WINDOW_HEIGHT, WINDOW_WIDTH,
-    MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, COMPACT_WIDTH, NARROW_WIDTH, SMALL_WIDTH, SHORT_HEIGHT, TINY_HEIGHT,
-    LEFT_PANEL_WIDTH, LEFT_PANEL_COMPACT, RIGHT_PANEL_WIDTH, RIGHT_PANEL_COMPACT, RIGHT_PANEL_NARROW,
-    RIGHT_PANEL_SMALL,
+    MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, LEFT_PANEL_SHARE, LEFT_PANEL_MIN, LEFT_PANEL_MAX,
+    RIGHT_PANEL_SHARE, RIGHT_PANEL_MIN, RIGHT_PANEL_MAX,
     REPLAY_EVENTS, WEATHER_CACHE_MINUTES, FONT_FAMILY,
     FS_SMALL, FS_LABEL, FS_BODY, FS_HEADING, FS_TITLE, FS_BRAND, FS_VALUE,
     FONT_SCALE_STEP, TEMP_GRADIENT_STOPS, RISK_GRADIENT_STOPS,
-    set_base_style, set_app_style, load_ui_settings, font_scale, scaled, c,
-    risk_band_color, contrast_text,
+    set_base_style, set_app_style, load_ui_settings, font_scale, ui_scale, fit_text_to_screen, scaled, c,
+    risk_band_color, contrast_text, temperature_gradient,
 )
 from data_manager import (
     load_census_profiles, get_property, geometry_centroid, load_geojson, load_response_capacity,
@@ -102,16 +101,68 @@ class GradientLegend(QWidget):
     def __init__(self, mode="Temperature", parent=None):
         super().__init__(parent)
         self.mode = mode
+        self.vertical = False
+        self.on_theme_changed()
+
+    def set_vertical(self, vertical):
+        """Vertical beside the map (tall screens use the width), horizontal below it."""
+        self.vertical = vertical
         self.on_theme_changed()
 
     def on_theme_changed(self):
-        s = font_scale()
-        self.setFixedHeight(int(FS_LABEL * s + 10 + 20 + 8 + FS_SMALL * s + 8))
+        s = ui_scale()
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(16777215, 16777215)
+        if self.vertical:
+            self.setFixedWidth(scaled(118))
+            self.setMinimumHeight(scaled(170))
+        else:
+            self.setFixedHeight(int(FS_LABEL * s + 10 + 20 + 8 + FS_SMALL * s + 8))
+        self.updateGeometry()
         self.update()
+
+    def _title(self):
+        if self.mode == "Temperature":
+            return "AIR TEMPERATURE NOW (°C)"
+        return "TODAY'S RELATIVE RISK" + ("" if self.vertical else "  (0 = low, 100 = extreme)")
 
     def set_mode(self, mode):
         self.mode = mode
         self.update()
+
+    def _stops(self):
+        """(gradient stops as (0-1 position, colour), labels as (0-1 position, text))."""
+        if self.mode == "Temperature":
+            lo, hi = TEMP_GRADIENT_STOPS[0][0], TEMP_GRADIENT_STOPS[-1][0]
+            stops = [((t - lo) / (hi - lo), colour) for t, colour in TEMP_GRADIENT_STOPS]
+            labels = [((t - lo) / (hi - lo), f"{t:.0f}°") for t, _ in TEMP_GRADIENT_STOPS]
+            labels[0], labels[-1] = (0.0, f"≤{lo:.0f}°"), (1.0, f"{hi:.0f}°+")
+        else:
+            stops = [(v / 100.0, colour) for v, colour in RISK_GRADIENT_STOPS]
+            labels = [(v / 100.0, str(v)) for v, _ in RISK_GRADIENT_STOPS]
+        return stops, labels
+
+    def _paint_vertical(self, p, title_font, label_font):
+        p.setFont(title_font)
+        p.setPen(QColor(c("text")))
+        title_rect = p.boundingRect(QRectF(0, 0, self.width(), 1000), Qt.TextWordWrap, self._title())
+        p.drawText(QRectF(0, 0, self.width(), title_rect.height()), Qt.TextWordWrap, self._title())
+        fm = QFontMetrics(label_font)
+        bar = QRectF(2, title_rect.height() + 10 + fm.height() / 2, 20,
+                     max(60, self.height() - title_rect.height() - 14 - fm.height()))
+        stops, labels = self._stops()
+        gradient = QLinearGradient(0, bar.bottom(), 0, bar.top())     # hot at the top
+        for pos, colour in stops:
+            gradient.setColorAt(pos, QColor(colour))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(gradient))
+        p.drawRoundedRect(bar, 8, 8)
+        p.setFont(label_font)
+        p.setPen(QColor(c("muted")))
+        for pos, text in labels:
+            y = bar.bottom() - pos * bar.height()
+            p.drawText(QRectF(bar.right() + 8, y - fm.height() / 2, self.width() - bar.right() - 8, fm.height()),
+                       Qt.AlignLeft | Qt.AlignVCenter, text)
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -123,26 +174,21 @@ class GradientLegend(QWidget):
         label_font = QFont(FONT_FAMILY)
         label_font.setPixelSize(scaled(FS_SMALL))
         label_font.setWeight(QFont.DemiBold)
+        if self.vertical:
+            self._paint_vertical(p, title_font, label_font)
+            p.end()
+            return
 
         p.setFont(title_font)
         p.setPen(QColor(c("text")))
         title_h = QFontMetrics(title_font).height()
-        title = ("AIR TEMPERATURE NOW (°C)" if self.mode == "Temperature"
-                 else "TODAY'S RELATIVE RISK  (0 = low, 100 = extreme)")
-        p.drawText(QRectF(0, 0, width, title_h), Qt.AlignLeft | Qt.AlignVCenter, title)
+        p.drawText(QRectF(0, 0, width, title_h), Qt.AlignLeft | Qt.AlignVCenter, self._title())
 
         bar = QRectF(2, title_h + 8, max(80, width - 4), 20)
         gradient = QLinearGradient(bar.left(), 0, bar.right(), 0)
-        if self.mode == "Temperature":
-            lo, hi = TEMP_GRADIENT_STOPS[0][0], TEMP_GRADIENT_STOPS[-1][0]
-            for t, colour in TEMP_GRADIENT_STOPS:
-                gradient.setColorAt((t - lo) / (hi - lo), QColor(colour))
-            labels = [((t - lo) / (hi - lo), f"{t:.0f}°") for t, _ in TEMP_GRADIENT_STOPS]
-            labels[0], labels[-1] = (0.0, f"≤{lo:.0f}°"), (1.0, f"{hi:.0f}°+")
-        else:
-            for s, colour in RISK_GRADIENT_STOPS:
-                gradient.setColorAt(s / 100.0, QColor(colour))
-            labels = [(s / 100.0, str(s)) for s, _ in RISK_GRADIENT_STOPS]
+        stops, labels = self._stops()
+        for pos, colour in stops:
+            gradient.setColorAt(pos, QColor(colour))
         p.setPen(Qt.NoPen)
         p.setBrush(QBrush(gradient))
         p.drawRoundedRect(bar, 8, 8)
@@ -221,7 +267,7 @@ class CollapsiblePanel(QFrame):
     def __init__(self, title, parent=None):
         super().__init__(parent)
         self.expanded = True
-        self.base_width = LEFT_PANEL_WIDTH
+        self.base_width = LEFT_PANEL_MAX
         self.setObjectName("leftPanel")
         set_base_style(self, "QFrame#leftPanel { background:$surface; border-right:1px solid $border; }"
                              "QWidget#leftBody { background:$surface; }"
@@ -259,11 +305,8 @@ class CollapsiblePanel(QFrame):
         layout.addWidget(self.scroll, 1)
         self.apply_width()
 
-    def expanded_width(self):
-        return int(self.base_width * (1 + (font_scale() - 1) * 0.7))
-
     def apply_width(self):
-        self.setFixedWidth(self.expanded_width() if self.expanded else self.COLLAPSED_WIDTH)
+        self.setFixedWidth(self.base_width if self.expanded else self.COLLAPSED_WIDTH)
 
     def toggle_panel(self):
         self.set_expanded(not self.expanded)
@@ -297,9 +340,9 @@ class ElidedLabel(QLabel):
         self.full_text = ""
         self.setMinimumWidth(1)
 
-    def set_full_text(self, text):
+    def set_full_text(self, text, tooltip=None):
         self.full_text = text
-        self.setToolTip(text)
+        self.setToolTip(tooltip or text)
         self._refresh()
 
     def resizeEvent(self, event):
@@ -447,11 +490,13 @@ class MainWindow(QMainWindow):
         self.capacities = load_response_capacity()
         self.zone_centroids = {}
         self.replay = None                  # start date while replaying a past heat wave
-        self._compact = self._narrow = self._tight = None
+        self._fitting = False
+        self._auto_collapsed = None         # side panel closed to make room
+        self._height_on = frozenset()
 
         self.setWindowTitle(f"{APP_SHORT} • {STATE_NAME}")
-        self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
         self.setMinimumSize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+        fit_to_screen(self, WINDOW_WIDTH, WINDOW_HEIGHT)
         self.build_ui()
         self.install_shortcuts()
         self.after_scale_change()
@@ -530,22 +575,6 @@ class MainWindow(QMainWindow):
         self.refresh_btn.clicked.connect(lambda: self.load_weather(force=True))
         layout.addWidget(self.refresh_btn, 0, Qt.AlignVCenter)
 
-        self.theme_toggle = ThemeToggle()
-        layout.addWidget(self.theme_toggle, 0, Qt.AlignVCenter)
-        self.size_control = TextSizeControl()
-        self.size_control.changed.connect(lambda _: self.after_scale_change())
-        layout.addWidget(self.size_control, 0, Qt.AlignVCenter)
-
-        who = self.user.get("full_name") or self.user["username"]
-        role = "System Admin" if self.user["role"] == "admin" else "City Administrator"
-        where = self.user.get("district") or self.user.get("city") or STATE_NAME
-        self.badge_full, self.badge_short = f"{who}\n{role} • {where}", who
-        self.badge = badge = QLabel(self.badge_full)
-        badge.setToolTip(f"{who} – {role}, {where}")
-        set_base_style(badge, f"font-size:{FS_SMALL}px;font-weight:700;color:$text;"
-                              f"background:$chip;border-radius:10px;padding:7px 12px;")
-        layout.addWidget(badge, 0, Qt.AlignVCenter)
-
         if self.user["role"] == "admin":
             self.manage_btn = manage = QPushButton("Manage Access")
             manage.setCursor(Qt.PointingHandCursor)
@@ -555,14 +584,58 @@ class MainWindow(QMainWindow):
             manage.clicked.connect(self.open_access_manager)
             layout.addWidget(manage, 0, Qt.AlignVCenter)
 
-        sign_out = QPushButton("Sign out")
-        sign_out.setCursor(Qt.PointingHandCursor)
-        set_base_style(sign_out, f"QPushButton {{ background:transparent;color:$text;border:1.5px solid $border;"
-                                 f"border-radius:11px;padding:10px 14px;font-weight:700;font-size:{FS_BODY}px; }}"
-                                 f"QPushButton:hover {{ background:$chip; }}")
-        sign_out.clicked.connect(self.sign_out)
-        layout.addWidget(sign_out, 0, Qt.AlignVCenter)
+        layout.addWidget(self._build_user_menu(), 0, Qt.AlignVCenter)
         return top
+
+    def _build_user_menu(self):
+        """Name button whose menu holds display settings and sign-out."""
+        who = self.user.get("full_name") or self.user["username"]
+        role = "System Admin" if self.user["role"] == "admin" else "City Administrator"
+        where = self.user.get("district") or self.user.get("city") or STATE_NAME
+        initials = "".join(part[0] for part in who.split()[:2]).upper() or "☰"
+        self.user_labels = {"full": f"{who}\n{role} • {where}", "short": who, "tiny": initials}
+        self.user_btn = btn = QToolButton()
+        btn.setText(self.user_labels["full"])
+        btn.setToolTip(f"{who} – {role}, {where}\nDisplay settings and sign out")
+        btn.setAccessibleName("Account and display settings")
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setPopupMode(QToolButton.InstantPopup)
+        set_base_style(btn, f"QToolButton {{ font-size:{FS_SMALL}px;font-weight:700;color:$text;background:$chip;"
+                            f"border:1px solid $border;border-radius:10px;padding:7px 28px 7px 12px; }}"
+                            f"QToolButton:hover {{ border-color:$borderStrong; }}"
+                            f"QToolButton::menu-indicator {{ subcontrol-position:right center; right:6px; }}")
+
+        menu = QMenu(btn)
+        set_base_style(menu, f"QMenu {{ background:$surface;border:1px solid $border;border-radius:10px;padding:6px; }}"
+                             f"QMenu::item {{ color:$text;font-size:{FS_BODY}px;font-weight:700;"
+                             f"padding:9px 18px;border-radius:8px; }}"
+                             f"QMenu::item:selected {{ background:$chip; }}"
+                             f"QMenu::separator {{ height:1px;background:$border;margin:6px 8px; }}")
+        panel = QFrame()
+        panel.setObjectName("menuPanel")
+        set_base_style(panel, f"QFrame#menuPanel {{ background:transparent; }}"
+                              f"QLabel {{ background:transparent;color:$text; }}")
+        box = QVBoxLayout(panel)
+        box.setContentsMargins(12, 8, 12, 8)
+        box.setSpacing(10)
+        name = QLabel(who)
+        set_base_style(name, f"font-size:{FS_BODY}px;font-weight:800;")
+        detail = QLabel(f"{role} • {where}")
+        set_base_style(detail, f"font-size:{FS_SMALL}px;color:$muted;")
+        box.addWidget(name)
+        box.addWidget(detail)
+        self.theme_toggle = ThemeToggle()
+        box.addWidget(self.theme_toggle)
+        self.size_control = TextSizeControl()
+        self.size_control.changed.connect(lambda _: self.after_scale_change())
+        box.addWidget(self.size_control)
+        panel_action = QWidgetAction(menu)
+        panel_action.setDefaultWidget(panel)
+        menu.addAction(panel_action)
+        menu.addSeparator()
+        menu.addAction("Sign out", self.sign_out)
+        btn.setMenu(menu)
+        return btn
 
     def _build_left_panel(self):
         self.left = CollapsiblePanel("OVERVIEW")
@@ -619,7 +692,11 @@ class MainWindow(QMainWindow):
         ))
 
         body.addSpacing(4)
-        body.addWidget(section_label("PRIORITY DISTRICTS"))
+        self.priority_title = section_label("PRIORITY DISTRICTS")
+        body.addWidget(self.priority_title)
+        self.priority_note = muted_label("")
+        self.priority_note.hide()
+        body.addWidget(self.priority_note)
         self.priority_box = QVBoxLayout()
         self.priority_box.setSpacing(6)
         body.addLayout(self.priority_box)
@@ -640,15 +717,16 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(22, 16, 22, 14)
         layout.setSpacing(12)
 
-        self.kpi_row = kpis = QHBoxLayout()
+        self.kpi_row = kpis = QGridLayout()
         kpis.setSpacing(12)
         self.kpi_high = KpiTile("Heat waves")
         self.kpi_hot = KpiTile("Hottest now")
         self.kpi_feels = KpiTile("Feels like (max)")
         self.kpi_pop = KpiTile("People exposed")
         self.kpi_alerts = KpiTile("Alerts")
-        for tile in (self.kpi_high, self.kpi_hot, self.kpi_feels, self.kpi_pop, self.kpi_alerts):
-            kpis.addWidget(tile, 1)
+        self.kpi_tiles = (self.kpi_high, self.kpi_hot, self.kpi_feels, self.kpi_pop, self.kpi_alerts)
+        self._kpi_columns = None
+        self._flow_kpis(len(self.kpi_tiles))
         layout.addLayout(kpis)
 
         self.replay_banner = QLabel()
@@ -661,30 +739,40 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         self.map_title = title = QLabel(f"{STATE_NAME}  •  Heat Risk Map")
         set_base_style(title, f"font-size:{FS_TITLE}px;font-weight:800;color:$text;")
-        self.map_hint = hint = QLabel("Hover over a district for a quick look, click it for details")
-        hint.setWordWrap(True)
+        self.map_hint = hint = ElidedLabel()
+        hint.set_full_text("Hover a district for a quick look · click it for details")
         hint.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         set_base_style(hint, f"font-size:{FS_BODY}px;color:$muted;")
         header.addWidget(title)
-        header.addStretch()
-        header.addWidget(hint)
+        header.addWidget(hint, 1)
         layout.addLayout(header)
 
+        # The map, plus the district picker and legend, which sit beside the map
+        # when that leaves it more room (wide windows) and below it otherwise.
+        self.map_area = QWidget()
+        self.map_grid = QGridLayout(self.map_area)
+        self.map_grid.setContentsMargins(0, 0, 0, 0)
+        self.map_grid.setSpacing(14)
         self.map = TamilNaduMap(self.census, self.select_item)
-        layout.addWidget(self.map, 1)
+        self.map_grid.addWidget(self.map, 0, 0)
+        layout.addWidget(self.map_area, 1)
 
-        bottom = QHBoxLayout()
+        self.map_controls = QWidget()
+        self.controls_box = bottom = QBoxLayout(QBoxLayout.LeftToRight, self.map_controls)
+        bottom.setContentsMargins(0, 0, 0, 0)
         bottom.setSpacing(14)
-        selector = QVBoxLayout()
-        selector.setSpacing(6)
-        selector.addWidget(section_label("DISTRICT"))
+        self.selector_box = selector = QWidget()
+        selector_layout = QVBoxLayout(selector)
+        selector_layout.setContentsMargins(0, 0, 0, 0)
+        selector_layout.setSpacing(6)
+        selector_layout.addWidget(section_label("DISTRICT"))
         self.combo = make_combo()
-        self.combo.setMinimumWidth(200)
+        self.combo.setMinimumWidth(170)
         self.combo.currentTextChanged.connect(self.select_from_combo)
-        selector.addWidget(self.combo)
-        bottom.addLayout(selector)
+        selector_layout.addWidget(self.combo)
+        bottom.addWidget(selector, 0, Qt.AlignTop)
 
-        legend_card = QFrame()
+        self.legend_card = legend_card = QFrame()
         legend_card.setObjectName("legendCard")
         set_base_style(legend_card, "QFrame#legendCard { background:$surface; border:1px solid $border; border-radius:12px; }")
         legend_layout = QVBoxLayout(legend_card)
@@ -692,7 +780,8 @@ class MainWindow(QMainWindow):
         self.legend = GradientLegend("Temperature")
         legend_layout.addWidget(self.legend)
         bottom.addWidget(legend_card, 1)
-        layout.addLayout(bottom)
+        self._legend_beside = None
+        self._place_map_controls(False)
         return centre
 
     def install_shortcuts(self):
@@ -704,57 +793,181 @@ class MainWindow(QMainWindow):
             QShortcut(QKeySequence(keys), self, activated=lambda: self.load_weather(force=True))
 
     # ------------------------------------------------------------------ sizing
+    # Nothing here assumes a particular screen. Side panels take a share of the
+    # window; then optional details are dropped one step at a time, measuring
+    # after each, until the dashboard fits. Only past the last step does the
+    # page scroll. Text size already follows the screen (fit_text_to_screen).
+    WIDTH_STEPS = ("short_name", "no_subtitle", "collapse_side", "tight", "icon_buttons",
+                   "initials", "min_right", "kpis_two_rows")
+    HEIGHT_STEPS = ("no_map_heading", "tight_vertical", "short_map", "no_kpi_notes")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        handle = self.windowHandle()
+        if handle is not None and not getattr(self, "_screen_hooked", False):
+            self._screen_hooked = True
+            handle.screenChanged.connect(self.on_screen_changed)
+            self.on_screen_changed(handle.screen())
+
+    def on_screen_changed(self, screen):
+        """Moved to another monitor (or its scaling changed): re-fit text and layout."""
+        if fit_text_to_screen(screen):
+            self.after_scale_change()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.apply_breakpoints()
+        self.fit_layout()
 
-    def apply_breakpoints(self):
-        """Adapt to the window width (logical px): wide, compact, narrow."""
-        if not hasattr(self, "detail"):     # resize before the UI is built
+    def fit_layout(self):
+        if not hasattr(self, "detail") or self._fitting:    # not built yet / already fitting
             return
-        width = self.width()
-        compact, narrow = width < COMPACT_WIDTH, width < NARROW_WIDTH
-        if narrow != self._narrow:          # only on crossing, so the ☰ button still works
-            self._narrow = narrow
-            self.left.set_expanded(not narrow)
-            self.badge.setVisible(not narrow)
-        if compact != self._compact:
-            self._compact = compact
-            self.subtitle.setVisible(not compact)
-            self.map_hint.setVisible(not compact)
-            self.theme_toggle.set_compact(compact)
-            self.size_control.set_compact(compact)
-            self.badge.setText(self.badge_short if compact else self.badge_full)
-        self.left.base_width = LEFT_PANEL_COMPACT if compact else LEFT_PANEL_WIDTH
-        self.left.apply_width()
-        self.map_title.setVisible(self.height() >= SHORT_HEIGHT)   # short screens: map needs the room
-        small = width < SMALL_WIDTH
-        tight = (small, self.height() < TINY_HEIGHT)
-        if tight != self._tight:            # small laptops (1366 px or 1920 px at 150-175 %)
-            self._tight = tight
-            self._apply_tight(*tight)
-        base = (RIGHT_PANEL_SMALL if small else RIGHT_PANEL_NARROW if narrow
-                else RIGHT_PANEL_COMPACT if compact else RIGHT_PANEL_WIDTH)
-        self.detail.setFixedWidth(int(base * (1 + (font_scale() - 1) * 0.6)))
+        self._fitting = True
+        try:
+            room = self.scroll.maximumViewportSize()
+            text = 1 + (ui_scale() - 1) * 0.6               # bigger text needs wider panels
+            share = lambda f, lo, hi: int(max(lo, min(hi, room.width() * f)) * text)
+            self.left.base_width = share(LEFT_PANEL_SHARE, LEFT_PANEL_MIN, LEFT_PANEL_MAX)
+            self._right_width = share(RIGHT_PANEL_SHARE, RIGHT_PANEL_MIN, RIGHT_PANEL_MAX)
+            self._right_min = int(RIGHT_PANEL_MIN * text)
+            self.left.apply_width()
 
-    def _apply_tight(self, small, short):
+            allow_beside = True
+            for _ in range(3):              # again if the legend moved, since that changes what fits
+                self._apply_height_steps(set())
+                for level in range(len(self.WIDTH_STEPS) + 1):
+                    self._apply_width_steps(set(self.WIDTH_STEPS[:level]))
+                    if self._needed().width() <= room.width():
+                        break
+                for level in range(len(self.HEIGHT_STEPS) + 1):
+                    self._apply_height_steps(set(self.HEIGHT_STEPS[:level]))
+                    if self._needed().height() <= room.height():
+                        break
+                need = self._needed()
+                if self._legend_beside and (need.width() > room.width() or need.height() > room.height()):
+                    allow_beside = False    # beside only when it still fits without scrolling
+                if not self._place_map_controls(allow_beside and self._legend_fits_beside()):
+                    break
+        finally:
+            self._fitting = False
+
+    def _map_scale(self, width, height):
+        rect = self.map.scene.sceneRect()
+        if rect.width() <= 0 or rect.height() <= 0 or width <= 0 or height <= 0:
+            return 0
+        return min(width / rect.width(), height / rect.height())
+
+    def _legend_fits_beside(self):
+        """True when the map ends up bigger with the picker and legend beside it."""
+        area = self.map_area.size()
+        spacing = self.map_grid.spacing()
+        if self._legend_beside:
+            side_w = self.map_controls.width() + spacing
+            region_w, region_h = area.width(), area.height()
+            below_h = self.selector_box.sizeHint().height() + spacing + 30
+        else:
+            side_w = max(self.combo.minimumSizeHint().width(), scaled(150)) + 34 + spacing
+            region_w, region_h = area.width(), area.height() + self.map_controls.height() + spacing
+            below_h = self.map_controls.height() + spacing
+        beside = self._map_scale(region_w - side_w, region_h)
+        below = self._map_scale(region_w, region_h - below_h)
+        margin = 1.04 if self._legend_beside else 0.96         # hysteresis: don't flip back and forth
+        return beside * margin > below
+
+    def _place_map_controls(self, beside):
+        """Returns True if the placement changed."""
+        if beside == self._legend_beside:
+            return False
+        self._legend_beside = beside
+        self.map_grid.removeWidget(self.map_controls)
+        self.controls_box.setDirection(QBoxLayout.TopToBottom if beside else QBoxLayout.LeftToRight)
+        self.controls_box.setAlignment(self.selector_box, Qt.AlignTop)
+        self.legend.set_vertical(beside)
+        self.legend_card.setSizePolicy(QSizePolicy.Preferred,
+                                       QSizePolicy.Expanding if beside else QSizePolicy.Preferred)
+        if beside:
+            self.map_controls.setFixedWidth(max(self.combo.minimumSizeHint().width(), scaled(150)) + 34)
+            self.map_grid.addWidget(self.map_controls, 0, 1)
+            self.map_grid.setColumnStretch(0, 1)
+        else:
+            self.map_controls.setMinimumWidth(0)
+            self.map_controls.setMaximumWidth(16777215)
+            self.map_grid.addWidget(self.map_controls, 1, 0)
+        return True
+
+    def _needed(self):
+        # Child changes reach the page's size hint through queued layout
+        # requests; handle them now so each step is measured straight away.
+        for _ in range(4):                  # one pass per nesting level
+            QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
+        return self.page.minimumSizeHint()
+
+    def _apply_width_steps(self, on):
+        self.user_btn.setText(self.user_labels["tiny" if "initials" in on else
+                                                "short" if "short_name" in on else "full"])
+        self._wide_details = "no_subtitle" not in on
+        self.subtitle.setVisible(self._wide_details)
+        self.map_hint.setVisible(self._wide_details and "no_map_heading" not in self._height_on)
+
+        collapse = "collapse_side" in on          # only act on a change, so ☰ still works
+        if collapse != self._auto_collapsed:
+            self._auto_collapsed = collapse
+            self.left.set_expanded(not collapse)
+
+        tight = "tight" in on
         top = self.top_bar.layout()
-        top.setContentsMargins(*((14, 8, 14, 8) if small or short else (24, 12, 24, 12)))
-        top.setSpacing(8 if small else 14)
-        self.refresh_btn.setText("⟳" if small else "⟳  Refresh")
+        m = top.contentsMargins()
+        top.setContentsMargins(14 if tight else 24, m.top(), 14 if tight else 24, m.bottom())
+        top.setSpacing(8 if tight else 14)
+        pad = 12 if tight else 22
+        m = self.centre_layout.contentsMargins()
+        self.centre_layout.setContentsMargins(pad, m.top(), pad, m.bottom())
+        self.kpi_row.setSpacing(8 if tight else 12)
+
+        self._icon_buttons = "icon_buttons" in on
+        self._update_refresh_label()
         if hasattr(self, "manage_btn"):
-            self.manage_btn.setText("Access" if small else "Manage Access")
-        pad = 12 if small else 22
-        self.centre_layout.setContentsMargins(pad, *((8, pad, 8) if short else (16, pad, 14)))
-        self.centre_layout.setSpacing(8 if small or short else 12)
-        self.kpi_row.setSpacing(8 if small else 12)
-        self.map.setMinimumHeight(160 if short else 220)
+            self.manage_btn.setText("Access" if self._icon_buttons else "Manage Access")
+        self.detail.setFixedWidth(self._right_min if "min_right" in on else self._right_width)
+        self._flow_kpis(3 if "kpis_two_rows" in on else len(self.kpi_tiles))
+
+    def _update_refresh_label(self):
+        if self.worker is not None and self.worker.isRunning():
+            self.refresh_btn.setText("…" if getattr(self, "_icon_buttons", False) else "Updating…")
+        else:
+            self.refresh_btn.setText("⟳" if getattr(self, "_icon_buttons", False) else "⟳  Refresh")
+
+    def _apply_height_steps(self, on):
+        self._height_on = on
+        heading = "no_map_heading" not in on
+        self.map_title.setVisible(heading)
+        self.map_hint.setVisible(heading and getattr(self, "_wide_details", True))
+        tight = "tight_vertical" in on
+        top = self.top_bar.layout()
+        m = top.contentsMargins()
+        top.setContentsMargins(m.left(), 8 if tight else 12, m.right(), 8 if tight else 12)
+        m = self.centre_layout.contentsMargins()
+        self.centre_layout.setContentsMargins(m.left(), 8 if tight else 16, m.right(), 8 if tight else 14)
+        self.centre_layout.setSpacing(8 if tight else 12)
+        self.map.setMinimumHeight(150 if "short_map" in on else 220)
+        for tile in self.kpi_tiles:
+            tile.sub.setVisible("no_kpi_notes" not in on)
+
+    def _flow_kpis(self, columns):
+        """One row of tiles, or two rows when the centre is very narrow."""
+        if columns == self._kpi_columns:
+            return
+        self._kpi_columns = columns
+        for tile in self.kpi_tiles:
+            self.kpi_row.removeWidget(tile)
+        for col in range(len(self.kpi_tiles)):
+            self.kpi_row.setColumnStretch(col, 1 if col < columns else 0)
+        for i, tile in enumerate(self.kpi_tiles):
+            self.kpi_row.addWidget(tile, i // columns, i % columns)
 
     def after_scale_change(self):
         self.size_control.sync()
-        self.left.apply_width()
         self.legend.on_theme_changed()
-        self.apply_breakpoints()
+        self.fit_layout()
 
     # ------------------------------------------------------------------ data
     def prepare_locations(self):
@@ -783,13 +996,14 @@ class MainWindow(QMainWindow):
             return
         self._reload_pending = False
         self.refresh_btn.setEnabled(False)
-        self.refresh_btn.setText("Updating…")
         self.worker = WeatherWorker(self.locations, self.demographics, self.capacities, force, self.replay)
         self.worker.finished_data.connect(self.weather_ready)
         self.worker.finished.connect(self._worker_finished)
         self.worker.start()
+        self._update_refresh_label()
 
     def _worker_finished(self):
+        self._update_refresh_label()
         if getattr(self, "_reload_pending", False):
             self.load_weather(force=False)
 
@@ -804,7 +1018,6 @@ class MainWindow(QMainWindow):
             elif info.get("replay"):              # replay could not be loaded – no stale numbers
                 item.set_metrics(placeholder_metrics(item.metrics["demographic"]))
         self.refresh_btn.setEnabled(not self.replay)
-        self.refresh_btn.setText("⟳  Refresh")
 
         zone_metrics = {i.zone_name: i.metrics for i in self.map.zone_items if i.metrics.get("loaded")}
         self.alerts, newly_confirmed = alert_engine.evaluate(zone_metrics, info)
@@ -855,7 +1068,7 @@ class MainWindow(QMainWindow):
                           f"districts · worst: {worst.lower()} alert" if high else "districts, next 5 days",
                           risk_band_color(worst))
         hot_name, hot = max(zm.items(), key=lambda kv: kv[1]["temperature"])
-        self.kpi_hot.set(f"{hot['temperature']:.1f}°C", hot_name, risk_band_color(hot["risk"]))
+        self.kpi_hot.set(f"{hot['temperature']:.0f}°C", hot_name, temperature_gradient(hot["temperature"])[0])
         best = None
         for name, m in zm.items():
             for day in m["forecast"]:
@@ -863,7 +1076,7 @@ class MainWindow(QMainWindow):
                     best = (name, day)
         if best:
             self.kpi_feels.set(f"{best[1]['stress']:.0f}°C", f"{best[0]} • {best[1]['date_text']}",
-                               risk_band_color(best[1]["risk"]))
+                               temperature_gradient(best[1]["stress"] - 4)[0])
         pop = sum(zm[n]["demographic"].get("population", 0) for n in high)
         self.kpi_pop.set(format_population(pop) if pop else "0", "in heat-wave districts",
                          risk_band_color(worst if pop else "GREEN"))
@@ -897,9 +1110,15 @@ class MainWindow(QMainWindow):
             self.alert_box.addWidget(muted_label(f"+ {len(self.alerts) - 8} more"))
 
     def _update_priority_list(self, zm):
+        """Heat-wave districts first, in colour. With no heat wave anywhere the list is
+        only for awareness, so it is titled and coloured to say no action is needed."""
         clear_layout(self.priority_box)
         ranked = sorted(zm.items(), key=lambda kv: (code_index(kv[1]["imd"]["code"]), kv[1]["priority"]),
                         reverse=True)[:8]
+        any_heat_wave = any(m["imd"]["code"] != "GREEN" for m in zm.values())
+        self.priority_title.setText("PRIORITY DISTRICTS" if any_heat_wave else "HIGHEST HEAT STRESS")
+        self.priority_note.setText("No heat wave expected – for awareness only, no action needed.")
+        self.priority_note.setVisible(bool(zm) and not any_heat_wave)
         for rank, (name, m) in enumerate(ranked, 1):
             row = ClickableRow()
             num = QLabel(str(rank))
@@ -908,10 +1127,12 @@ class MainWindow(QMainWindow):
             label = QLabel(name)
             set_base_style(label, f"font-size:{FS_BODY}px;font-weight:700;")
             score = QLabel(f"{m['priority']:.0f}")
-            colour = risk_band_color(m["imd"]["code"] if m["imd"]["code"] != "GREEN" else
-                                     (m["peak_band"] if m["peak_band"] != "—" else "LOW"))
-            set_base_style(score, f"font-size:{FS_SMALL}px;font-weight:800;color:{contrast_text(colour)};"
-                                  f"background:{colour};border-radius:7px;padding:3px 9px;")
+            if m["imd"]["code"] != "GREEN":
+                colour = risk_band_color(m["imd"]["code"])
+                chip = f"color:{contrast_text(colour)};background:{colour};"
+            else:
+                chip = "color:$text;background:$chip;"
+            set_base_style(score, f"font-size:{FS_SMALL}px;font-weight:800;{chip}border-radius:7px;padding:3px 9px;")
             score.setToolTip(f"Priority {m['priority']:.0f}/100 – worst heat stress this week: "
                              f"{m['peak_band'].lower()}")
             row.row.addWidget(num)
@@ -927,8 +1148,14 @@ class MainWindow(QMainWindow):
         weather = "past weather (replay)" if self.replay else "forecast updates hourly"
         usual = "" if self.weather_info.get("normals") else " (usual temperatures not loaded)"
         self.status.set_full_text(
-            f"{weather.capitalize()}   ·   'Feels like' = UTCI   ·   Heat waves = IMD rules{usual}   ·   "
-            f"Population = Census 2011   ·   {alerts_text.capitalize()}   ·   {APP_VERSION}"
+            f"{weather.capitalize()}   ·   {alerts_text.capitalize()}   ·   ⓘ About the data",
+            f"About the data\n"
+            f"• Weather: Open-Meteo – {weather}\n"
+            f"• 'Feels like' = UTCI (sun, humidity, wind and heat from the ground)\n"
+            f"• Heat waves = IMD rules{usual}\n"
+            f"• Population = Census 2011\n"
+            f"• {alerts_text.capitalize()}\n"
+            f"• {APP_VERSION}",
         )
 
     # ------------------------------------------------------------------ selection
@@ -1030,6 +1257,7 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     load_ui_settings()
+    fit_text_to_screen(app.primaryScreen())     # text sized for this screen, before login
     set_app_style(app, APP_STYLE)
     auth = AuthManager()
 
@@ -1039,6 +1267,8 @@ def main():
             return
         window = MainWindow(login.user, auth)
         window.showMaximized()
+        window.raise_()                 # in front, not behind whatever had focus before sign-in
+        window.activateWindow()
         app.exec_()
         if not getattr(window, "_signed_out", False):
             break

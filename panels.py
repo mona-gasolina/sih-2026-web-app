@@ -1,7 +1,7 @@
 from PyQt5.QtCore import Qt, QPointF, QRectF
 from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
+    QBoxLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QScrollArea, QToolButton, QVBoxLayout, QWidget
 )
 
 from config import (
@@ -101,36 +101,57 @@ def friendly_reason(imd):
     return "Temperatures are within the usual range for this time of year."
 
 
+def feels_like_text(m):
+    """'Feels like' for right now, without a meaningless sun/shade split after sunset."""
+    sun, shade = round(m["stress"]), round(m["stress_shade"])
+    if (m.get("solar") or 0) < 5:          # W/m² – night, or the sun is barely up
+        return f"Feels like {sun}° (sun is down)"
+    if sun == shade:
+        return f"Feels like {sun}°"
+    return f"Feels like {sun}° in the sun, {shade}° in the shade"
+
+
 class HeroCard(GradientCard):
     """The selected district: now, and how hot it will feel today."""
 
     def __init__(self, name, m):
         super().__init__(temperature_gradient(m["today_peak_stress"] - 4), radius=16)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 18, 22, 18)
+        layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(4)
 
-        top = QHBoxLayout()
+        self.top = top = QBoxLayout(QBoxLayout.LeftToRight)
+        top.setSpacing(6)
         top.addWidget(self.label(name, FS_TITLE + 2, 800), 1)
-        top.addWidget(self.pill(f"Today: {m['risk'].lower()} heat stress", wrap=True), 0, Qt.AlignTop)
+        peak = self.pill(f"Peak today: {m['risk'].lower()}", wrap=True)
+        peak.setToolTip("How strong the heat stress gets at the hottest time of today.")
+        top.addWidget(peak, 0, Qt.AlignTop | Qt.AlignLeft)
         layout.addLayout(top)
 
-        row = QHBoxLayout()
-        row.setSpacing(18)
+        self.row = row = QBoxLayout(QBoxLayout.LeftToRight)
+        row.setSpacing(12)
         row.addWidget(self.label(f"{m['temperature']:.0f}°C", FS_VALUE + 12, 800, wrap=False))
         details = QVBoxLayout()
         details.setSpacing(2)
-        details.addWidget(self.label(
-            f"Feels like {m['stress']:.0f}° in the sun, {m['stress_shade']:.0f}° in the shade", FS_BODY, 700))
+        details.addWidget(self.label(feels_like_text(m), FS_BODY, 700))
         cloud = f"  ·  Cloud {m['cloud']:.0f}%" if m.get("cloud") is not None else ""
         details.addWidget(self.label(
-            f"Humidity {m['humidity']:.0f}%  ·  Wind {m['wind'] * 3.6:.0f} km/h{cloud}", FS_BODY, 500))
+            f"Humidity {m['humidity']:.0f}%  ·  Wind {m['wind'] * 3.6:.0f} km/⁠h{cloud}", FS_BODY, 500))
         row.addLayout(details, 1)
         layout.addLayout(row)
-        category = self.label(f"Right now: {m['stress_category'].lower()}", FS_SMALL, 600)
+        category = self.label(f"Now: {m['stress_category'].lower()}", FS_SMALL, 600)
         category.setToolTip(f"{m['stress_model']} – how hot it feels to the body, counting sun, "
                             "humidity, wind and heat from the ground.")
         layout.addWidget(category)
+
+    def resizeEvent(self, event):
+        """Narrow panel (small laptops): stack the pieces instead of squeezing them side by side."""
+        super().resizeEvent(event)
+        direction = QBoxLayout.TopToBottom if self.width() < scaled(400) else QBoxLayout.LeftToRight
+        if self.row.direction() != direction:
+            self.top.setDirection(direction)
+            self.row.setDirection(direction)
+            self.row.setSpacing(4 if direction == QBoxLayout.TopToBottom else 12)
 
 
 class StatTile(QFrame):
@@ -156,6 +177,47 @@ class StatTile(QFrame):
             set_base_style(lbl, style)
             layout.addWidget(lbl)
         layout.addStretch()
+
+
+class MoreNumbers(QWidget):
+    """The secondary scores, folded away so the headline numbers stand out."""
+
+    def __init__(self, m, open_=False, on_toggle=None):
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        self.button = QToolButton()
+        self.button.setCheckable(True)
+        self.button.setCursor(Qt.PointingHandCursor)
+        set_base_style(self.button, f"QToolButton {{ font-size:{FS_SMALL}px;font-weight:800;color:$muted;"
+                                    f"background:transparent;border:none;padding:2px 0; }}"
+                                    f"QToolButton:hover {{ color:$text; }}")
+        layout.addWidget(self.button, 0, Qt.AlignLeft)
+        self.card = SurfaceCard()
+        self.card.body.setSpacing(6)
+        rows = [
+            ("Heat score", f"{m['thermal_score']:.0f} / 100",
+             "75% the hottest it will feel, 25% the hours of very strong heat."),
+            ("Heat index now (shade)", f"{m['heat_index']:.0f}°",
+             "The heat index most weather services use: temperature with humidity, in the shade."),
+            ("Feels like now, in the shade", f"{m['stress_shade']:.0f}°", "UTCI for someone in the shade."),
+        ]
+        for label, value, tip in rows:
+            row = kv_row(label, value)
+            row.itemAt(0).widget().setToolTip(tip)
+            self.card.body.addLayout(row)
+        layout.addWidget(self.card)
+        self.on_toggle = on_toggle
+        self.button.toggled.connect(self._toggled)
+        self.button.setChecked(open_)
+        self._toggled(open_)
+
+    def _toggled(self, open_):
+        self.button.setText("▾  Fewer numbers" if open_ else "▸  More numbers")
+        self.card.setVisible(open_)
+        if self.on_toggle:
+            self.on_toggle(open_)
 
 
 class ForecastList(SurfaceCard):
@@ -428,6 +490,7 @@ class DetailPanel(QFrame):
         self.content.addLayout(self.dynamic)
         self.content.addStretch(1)
 
+        self._more_open = False            # "More numbers" stays open across districts
         placeholder = QLabel("Pick a district on the map to see its details.")
         placeholder.setWordWrap(True)
         set_base_style(placeholder, f"font-size:{FS_BODY}px;color:$muted;")
@@ -469,26 +532,19 @@ class DetailPanel(QFrame):
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(10)
         hours = m["today_hours_danger"]
-        tiles = [
-            ("Risk score", f"{m['risk_score']:.0f}", "heat, plus how many people live here",
-             risk_band_color(m["risk"]),
-             "0–100. 70% how hot it feels today, 30% how many people are exposed."),
-            ("Heat score", f"{m['thermal_score']:.0f}", "today's peak and how long it lasts",
-             risk_band_color(m["risk"]),
-             "0–100. 75% the hottest it will feel, 25% the hours of very strong heat."),
-            ("Hottest it'll feel", f"{m['today_peak_stress']:.0f}°",
-             f"in the sun · {hours} h of very strong heat" if hours else "in the sun",
-             temperature_gradient(m["today_peak_stress"] - 4)[0],
-             "UTCI 'feels like' temperature for someone standing in the sun."),
-            ("Heat index now", f"{m['heat_index']:.0f}°", "temperature with humidity",
-             temperature_gradient(m["heat_index"] - 4)[0],
-             "The heat index most weather services use (in the shade)."),
-        ]
-        for i, (label, value, sub, colour, tip) in enumerate(tiles):
-            grid.addWidget(StatTile(label, value, sub, colour, tip), i // 2, i % 2)
+        today = m["forecast"][0] if m.get("forecast") else {}
+        when = f"at {today['peak_time']}" if today.get("peak_time") else "in the sun"
+        grid.addWidget(StatTile(
+            "Hottest it'll feel today", f"{m['today_peak_stress']:.0f}°",
+            f"{when} · {hours} h of very strong heat" if hours else when,
+            temperature_gradient(m["today_peak_stress"] - 4)[0],
+            "UTCI 'feels like' temperature for someone standing in the sun."), 0, 0)
+        grid.addWidget(StatTile(
+            "Risk today", m["risk"].title(), f"score {m['risk_score']:.0f}/100 · heat + people exposed",
+            risk_band_color(m["risk"]),
+            "0–100. 70% how hot it feels today, 30% how many people are exposed."), 0, 1)
         self.dynamic.addLayout(grid)
-
-        self.dynamic.addWidget(ActionsCard(m, alert))
+        self.dynamic.addWidget(MoreNumbers(m, self._more_open, self._remember_more))
 
         self.dynamic.addWidget(self._section("Next 5 days"))
         chart_card = SurfaceCard()
@@ -496,6 +552,10 @@ class DetailPanel(QFrame):
         chart.set_forecast(m["forecast"])
         chart_card.body.addWidget(chart)
         self.dynamic.addWidget(chart_card)
-        self.dynamic.addWidget(ForecastList(m["forecast"]))
 
+        self.dynamic.addWidget(ActionsCard(m, alert))
+        self.dynamic.addWidget(ForecastList(m["forecast"]))
         self.dynamic.addWidget(CensusCard(m))
+
+    def _remember_more(self, open_):
+        self._more_open = open_

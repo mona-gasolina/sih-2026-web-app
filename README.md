@@ -167,14 +167,15 @@ district who have a mobile number. Without these variables everything is logged 
 
 ## Accessibility & UI
 
-- Light and dark mode (top bar and sign-in screen), remembered per computer.
-- Text size 100–160 % (A− / A+, `Ctrl +`, `Ctrl −`, `Ctrl 0`), remembered per computer.
+- Light and dark mode (menu under your name, and the sign-in screen), remembered per computer.
+- Text size 70–160 % (A− / A+, `Ctrl +`, `Ctrl −`, `Ctrl 0`), remembered per computer.
 - All text colours meet WCAG AA contrast (4.5:1), including on gradient cards.
 - Follows Windows display scaling exactly (125 %, 150 %, 175 %) instead of Qt 5's rounding
   (which turned 150 % into 200 % and made the app too big for smaller laptops).
-- The dashboard adapts to the window: below 1600 px (logical) the top bar and right panel
-  get slimmer; below 1400 px the side panel starts collapsed (☰ opens it). Below its
-  minimum size it scrolls instead of clipping. Dialogs never open larger than the screen.
+- Fits any screen: text is sized for the monitor (and re-sized when moved to another one),
+  side panels take a share of the window, and on smaller windows optional details are
+  dropped step by step (subtitle, button labels, side panel collapses behind ☰ …) until the
+  dashboard fits. Only past that does it scroll. Dialogs never open larger than the screen.
 - Password fields have a show/hide eye; Caps Lock warning; 5 failed sign-ins → 60 s lock.
 
 ## Run

@@ -217,7 +217,8 @@ health data are added.
 3. Works out "right now" values with `calculate_current()`.
 4. Adds the population-based relative risk.
 5. Counts high-risk days and the longest run of them in a row.
-6. Computes a **priority score** for the "Priority districts" list:
+6. Computes a **priority score** for the "Priority districts" list (called "Highest heat
+   stress", with grey scores, when no district has a heat wave – so red only ever means act):
    `60% risk (next 3 days) + 25% danger hours + 15% (100 − response capacity)`.
 
 It returns one big dictionary. Every screen reads from that dictionary.
@@ -368,14 +369,16 @@ You only need three ideas to read the UI files:
 
 | On screen | Code |
 |---|---|
-| Top bar (title, theme, text size, Sign out) | `MainWindow._build_top_bar()` in `main.py` |
+| Top bar (title, Refresh, Manage Access) | `MainWindow._build_top_bar()` in `main.py` |
+| Name button menu (light/dark, text size, Sign out) | `MainWindow._build_user_menu()` |
 | Left panel (map layer, alerts, priority list) | `MainWindow._build_left_panel()` |
-| Summary tiles + map + district dropdown + legend | `MainWindow._build_centre()` |
-| Right panel | `DetailPanel` in `panels.py` → `show_item()` |
-| District banner at the top of the right panel | `HeroCard` |
-| The four coloured number cards | `MetricCard` |
+| Summary tiles + map + district dropdown + legend | `MainWindow._build_centre()`; the picker and legend move beside or below the map in `_place_map_controls()`, whichever leaves the map bigger |
+| Right panel | `DetailPanel` in `panels.py` → `show_item()` (headline, 5-day chart, status, daily list, people) |
+| District banner at the top of the right panel | `HeroCard` (stacks vertically on a narrow panel) |
+| The two headline tiles | `StatTile` (hottest it'll feel today, risk today) |
+| Heat score, heat index, shade feels-like | `MoreNumbers` (folded away behind "More numbers") |
 | 5-day line chart | `TrendChart` (drawn by hand with `QPainter`) |
-| One row per forecast day | `ForecastRow` |
+| One row per forecast day | `ForecastList` |
 | Alert status + suggested actions | `ActionsCard` (text from `suggested_actions()` in `alerts.py`) |
 | Population box | `CensusCard` |
 | Map and hover card | `TamilNaduMap` in `map_view.py` |
@@ -409,10 +412,14 @@ with fixed colours. Otherwise it won't follow dark mode or text size.
 
 - `main()` tells Qt to follow Windows scaling exactly (`PassThrough`), so 150 %
   stays 150 % instead of being rounded to 200 %.
-- `MainWindow.apply_breakpoints()` runs on every resize. Below `COMPACT_WIDTH`
-  it hides the subtitle and map hint, shortens the theme button and name badge,
-  and narrows the right panel. Below `NARROW_WIDTH` it collapses the side panel
-  and hides the name badge.
+- Nothing is tuned to one screen. `fit_text_to_screen()` (`config.py`) sizes
+  text for the monitor's usable area (smaller on small laptops, larger on big
+  monitors) on top of the user's own A−/A+ choice, and runs again when the
+  window moves to another monitor.
+- `MainWindow.fit_layout()` runs on every resize. Side panels take a share of
+  the window (`LEFT_PANEL_*`, `RIGHT_PANEL_*`), then it drops optional details
+  one step at a time (`WIDTH_STEPS`, `HEIGHT_STEPS`), measuring after each,
+  until the dashboard fits. Only past the last step does the page scroll.
 - Dialogs use `fit_to_screen()` (`ui_controls.py`) so they never open bigger
   than the screen; long forms scroll.
 - The "?" button Windows adds to dialogs is turned off
@@ -446,7 +453,7 @@ multiplied by it. For sizes in drawing code, use `scaled(px)`.
 | Warn after 3 updates instead of 2 | `CONFIRM_UPDATES` in `alerts.py` |
 | Change how far apart updates must be | `MIN_UPDATE_GAP_HOURS` / `MAX_UPDATE_GAP_HOURS` in `alerts.py` |
 | Add another replay event | `REPLAY_EVENTS` in `config.py` (start date, label) |
-| Change when the layout gets compact | `COMPACT_WIDTH`, `NARROW_WIDTH`, `RIGHT_PANEL_*` in `config.py` |
+| Change how the layout shrinks on small screens | `WIDTH_STEPS` / `HEIGHT_STEPS` in `main.py`; panel shares and `TEXT_FIT_*` in `config.py` |
 | Change the heat-wave thresholds or colour rules | constants and `district_code()` in `heatwave.py` |
 | Mark a district as coastal / hills | `COASTAL` / `HILLS` in `heatwave.py` |
 | Refresh weather more/less often | `WEATHER_CACHE_MINUTES` in `config.py` |
