@@ -127,9 +127,10 @@ function applyTheme(name) {
   document.documentElement.dataset.theme = name;
   const tokens = state.config?.themes?.[name] || {};
   for (const [key, value] of Object.entries(tokens)) document.documentElement.style.setProperty(`--${key}`, value);
-  $("#theme").setAttribute("aria-checked", String(name === "dark"));     // a switch: shows the current mode
-  $("#login-theme").innerHTML = name === "dark" ? SUN_ICON : MOON_ICON;   // drawn, not font symbols
-  $("#login-theme").title = name === "dark" ? "Switch to light mode" : "Switch to dark mode";
+  for (const id of ["#theme", "#login-theme"]) {        // top bar and sign-in page
+    $(id).innerHTML = name === "dark" ? SUN_ICON : MOON_ICON;   // drawn, not font symbols
+    $(id).title = name === "dark" ? "Switch to light mode" : "Switch to dark mode";
+  }
   if (state.geoLayer) paintMap();
 }
 

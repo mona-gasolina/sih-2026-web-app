@@ -54,6 +54,7 @@
         <option value="">Live forecast</option>
       </select>
       <button id="refresh" class="control" type="button" title="Get the latest forecast now">⟳ <span class="label">Refresh</span></button>
+      <button id="theme" class="control icon" type="button" aria-label="Switch light / dark mode"></button>
       <div class="menu">
         <button id="user-btn" class="control user-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="user-menu">
           <span id="user-name">Account</span> <span aria-hidden="true">▾</span></button>
@@ -61,8 +62,6 @@
           <p id="user-full" class="menu-name"></p>
           <p id="user-role" class="small muted"></p>
           <button id="open-log" class="control menu-item" type="button" hidden>Alert log</button>
-          <button id="theme" class="control menu-item theme-switch" type="button" role="switch" aria-checked="false">
-            <span>Dark mode</span><span class="switch" aria-hidden="true"></span></button>
           <button id="sign-out" class="control menu-item" type="button">Sign out</button>
         </div>
       </div>
