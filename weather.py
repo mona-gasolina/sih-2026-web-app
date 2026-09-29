@@ -185,6 +185,7 @@ def get_weather(locations, force=False, replay=None):
         return ({n: normalize(p) for n, p in payloads.items()},
                 {"source": "Open-Meteo", "fetched_at": time.time(), "fresh": True, "error": ""})
     except Exception as exc:
+        print(f"Weather download failed: {exc!r}", flush=True)
         # Stale cache is better than invented numbers.
         cache = load_cache(names, max_age_minutes=24 * 60)
         if cache:

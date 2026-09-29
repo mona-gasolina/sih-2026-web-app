@@ -350,8 +350,13 @@ def ui_config():
 def health():
     with _lock:
         live = _snapshots.get(None)
+    info = live["info"] if live else {}
     return {"ok": True, "ready": _ready.is_set(),
             "computed_at": live["computed_at"] if live else None,
+            "weather_source": info.get("source"),
+            "weather_time": datetime.fromtimestamp(info["fetched_at"]).isoformat(timespec="seconds")
+                            if info.get("fetched_at") else None,
+            "weather_error": info.get("error") or None,
             "alert_gateway": alert_engine.gateway_status() or "not configured (alerts are logged only)"}
 
 
