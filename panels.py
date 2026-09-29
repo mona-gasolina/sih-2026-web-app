@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
 from config import (
     FONT_FAMILY, FS_SMALL, FS_LABEL, FS_BODY, FS_HEADING, FS_VALUE, FS_TITLE,
     set_base_style, qss_gradient, c, scaled,
-    temperature_gradient, risk_band_color, contrast_text,
+    temperature_gradient, risk_band_color, contrast_text, band_label, stress_label, BAND_ADVICE,
 )
 from alerts import suggested_actions
 
@@ -123,8 +123,9 @@ class HeroCard(GradientCard):
         self.top = top = QBoxLayout(QBoxLayout.LeftToRight)
         top.setSpacing(6)
         top.addWidget(self.label(name, FS_TITLE + 2, 800), 1)
-        peak = self.pill(f"Peak today: {m['risk'].lower()}", wrap=True)
-        peak.setToolTip("How strong the heat stress gets at the hottest time of today.")
+        peak = self.pill(f"Peak today: {band_label(m['risk']).lower()}", wrap=True)
+        peak.setToolTip("How hot it gets for someone outdoors at the hottest time of today. "
+                        + BAND_ADVICE.get(m["risk"], ""))
         top.addWidget(peak, 0, Qt.AlignTop | Qt.AlignLeft)
         layout.addLayout(top)
 
@@ -139,9 +140,9 @@ class HeroCard(GradientCard):
             f"Humidity {m['humidity']:.0f}%  ·  Wind {m['wind'] * 3.6:.0f} km/⁠h{cloud}", FS_BODY, 500))
         row.addLayout(details, 1)
         layout.addLayout(row)
-        category = self.label(f"Now: {m['stress_category'].lower()}", FS_SMALL, 600)
+        category = self.label(f"Now: {stress_label(m['stress_category']).lower()}", FS_SMALL, 600)
         category.setToolTip(f"{m['stress_model']} – how hot it feels to the body, counting sun, "
-                            "humidity, wind and heat from the ground.")
+                            f"humidity, wind and heat from the ground ({m['stress_category'].lower()}).")
         layout.addWidget(category)
 
     def resizeEvent(self, event):
@@ -263,7 +264,7 @@ class ForecastList(SurfaceCard):
         if day.get("heatwave", "NONE") != "NONE":
             severe = day["heatwave"].startswith("SEVERE")
             chips.addWidget(band_chip("Severe heat wave" if severe else "Heat wave", "RED" if severe else "ORANGE"))
-        chips.addWidget(band_chip(day["risk"].title(), day["risk"]))
+        chips.addWidget(band_chip(band_label(day["risk"]), day["risk"]))
 
         grid.addWidget(name, 0, 0)
         grid.addWidget(temps, 0, 1, Qt.AlignRight)
@@ -419,7 +420,7 @@ class ActionsCard(SurfaceCard):
         self.body.addWidget(what)
 
         dot_colour = risk_band_color(imd["code"] if imd["code"] != "GREEN" else peak)
-        for action in suggested_actions(m):
+        for action in suggested_actions(m, alert):
             row = QHBoxLayout()
             row.setSpacing(10)
             dot = QLabel("●")
@@ -540,7 +541,7 @@ class DetailPanel(QFrame):
             temperature_gradient(m["today_peak_stress"] - 4)[0],
             "UTCI 'feels like' temperature for someone standing in the sun."), 0, 0)
         grid.addWidget(StatTile(
-            "Risk today", m["risk"].title(), f"score {m['risk_score']:.0f}/100 · heat + people exposed",
+            "Risk today", band_label(m["risk"]), f"score {m['risk_score']:.0f}/100 · heat + people exposed",
             risk_band_color(m["risk"]),
             "0–100. 70% how hot it feels today, 30% how many people are exposed."), 0, 1)
         self.dynamic.addLayout(grid)

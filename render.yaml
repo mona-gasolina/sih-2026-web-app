@@ -1,0 +1,24 @@
+# Render Blueprint – hosts the web API and dashboard as one free web service.
+# Render → New → Blueprint → pick this repo. It asks for HEAT_ADMIN_PASSWORD once.
+# Free services sleep after ~15 min without visitors; a free uptime monitor that
+# opens /health every 10 min keeps it awake (see README, "Hosting").
+services:
+  - type: web
+    name: heat-intelligence
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements-web.txt
+    startCommand: python api.py
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: HEAT_API_HOST
+        value: 0.0.0.0
+      - key: HEAT_TRUST_PROXY
+        value: "1"
+      - key: HEAT_ADMIN_PASSWORD      # password of the "admin" System Admin account
+        sync: false
+      - key: HEAT_API_KEY             # protects /refresh and lets other systems read the API
+        generateValue: true

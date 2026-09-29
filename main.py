@@ -18,7 +18,7 @@ from config import (
     RIGHT_PANEL_SHARE, RIGHT_PANEL_MIN, RIGHT_PANEL_MAX,
     REPLAY_EVENTS, WEATHER_CACHE_MINUTES, FONT_FAMILY,
     FS_SMALL, FS_LABEL, FS_BODY, FS_HEADING, FS_TITLE, FS_BRAND, FS_VALUE,
-    FONT_SCALE_STEP, TEMP_GRADIENT_STOPS, RISK_GRADIENT_STOPS,
+    FONT_SCALE_STEP, TEMP_GRADIENT_STOPS, RISK_GRADIENT_STOPS, band_label,
     set_base_style, set_app_style, load_ui_settings, font_scale, ui_scale, fit_text_to_screen, scaled, c,
     risk_band_color, contrast_text, temperature_gradient,
 )
@@ -1024,7 +1024,7 @@ class MainWindow(QMainWindow):
         for alert in newly_confirmed:
             m = zone_metrics[alert["district"]]
             alert_engine.dispatch(alert, self.auth.recipients_for(alert["district"]),
-                                  alert_engine.suggested_actions(m))
+                                  alert_engine.suggested_actions(m, alert))
 
         self._update_kpis(zone_metrics)
         self._update_alert_list()
@@ -1133,8 +1133,8 @@ class MainWindow(QMainWindow):
             else:
                 chip = "color:$text;background:$chip;"
             set_base_style(score, f"font-size:{FS_SMALL}px;font-weight:800;{chip}border-radius:7px;padding:3px 9px;")
-            score.setToolTip(f"Priority {m['priority']:.0f}/100 – worst heat stress this week: "
-                             f"{m['peak_band'].lower()}")
+            score.setToolTip(f"Priority {m['priority']:.0f}/100 – hottest day this week: "
+                             f"{band_label(m['peak_band']).lower()}")
             row.row.addWidget(num)
             row.row.addWidget(label, 1)
             row.row.addWidget(score)
@@ -1211,7 +1211,7 @@ class MainWindow(QMainWindow):
             ask = QMessageBox.question(
                 self, "No confirmed warnings",
                 "There are no confirmed warnings right now.\n\nSend a manual advisory for "
-                f"{self.selected_item.zone_name} ({m['risk']} heat stress today) to its officers?")
+                f"{self.selected_item.zone_name} ({band_label(m['risk']).lower()} today) to its officers?")
             if ask != QMessageBox.Yes:
                 return
             targets = [{
@@ -1228,7 +1228,7 @@ class MainWindow(QMainWindow):
         for alert in targets:
             m = self.map.find(alert["district"]).metrics
             results = alert_engine.dispatch(alert, self.auth.recipients_for(alert["district"]),
-                                            alert_engine.suggested_actions(m))
+                                            alert_engine.suggested_actions(m, alert))
             for label, channel, status in results:
                 lines.append(f"{alert['district']}: {label} – {channel} – {status}")
         QMessageBox.information(self, "Alert dispatch", "\n".join(lines) or "Nothing was sent.")

@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Heat Intelligence • Tamil Nadu</title>
+  <meta name="description" content="Extreme heatwave early warning and human thermal stress index for Tamil Nadu">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='14' fill='%23F97316'/%3E%3Cg stroke='%23F97316' stroke-width='5' stroke-linecap='round'%3E%3Cpath d='M32 4v8M32 52v8M4 32h8M52 32h8M12 12l6 6M46 46l6 6M12 52l6-6M46 18l6-6'/%3E%3C/g%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Sign in: the same accounts as the desktop app -->
+  <section id="login" class="login" hidden aria-labelledby="login-title">
+    <button id="login-theme" class="control icon login-theme" type="button" aria-label="Switch light / dark mode">☾</button>
+    <form id="login-form" class="login-card" novalidate>
+      <div class="login-brand">
+        <h1 id="login-title">HEAT INTELLIGENCE</h1>
+        <p class="subtitle">Extreme Heatwave Early Warning • Human Thermal Stress Index</p>
+      </div>
+      <p id="login-notice" class="login-notice" hidden></p>
+      <label for="login-role">Access type</label>
+      <select id="login-role" class="field">
+        <option value="city_admin">City Administrator</option>
+        <option value="admin">System Admin</option>
+      </select>
+      <label for="login-user">Login ID</label>
+      <input id="login-user" class="field" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      <label for="login-pass">Password</label>
+      <div class="password">
+        <input id="login-pass" class="field" type="password" autocomplete="current-password" required>
+        <button id="login-eye" type="button" class="eye" aria-label="Show password" aria-pressed="false">Show</button>
+      </div>
+      <p id="login-caps" class="caps" hidden>Caps Lock is on</p>
+      <p id="login-error" class="login-error" role="alert" hidden></p>
+      <button id="login-submit" class="primary" type="submit">Sign in</button>
+      <p class="small muted">Accounts are created by the System Admin (Manage Access in the desktop app).</p>
+    </form>
+  </section>
+
+  <div id="app" hidden>
+  <header class="topbar">
+    <div class="brand">
+      <h1>HEAT INTELLIGENCE</h1>
+      <p class="subtitle">Extreme Heatwave Early Warning • Human Thermal Stress Index</p>
+    </div>
+    <div class="top-actions">
+      <span id="updated" class="updated" role="status">Getting the forecast…</span>
+      <label class="visually-hidden" for="source">Weather data</label>
+      <select id="source" class="control" title="Live = next 5 days. Replay = archived weather for a real past heat wave.">
+        <option value="">Live forecast</option>
+      </select>
+      <button id="refresh" class="control" type="button" title="Get the latest forecast now">⟳ <span class="label">Refresh</span></button>
+      <div class="menu">
+        <button id="user-btn" class="control user-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="user-menu">
+          <span id="user-name">Account</span> <span aria-hidden="true">▾</span></button>
+        <div id="user-menu" class="menu-panel" hidden>
+          <p id="user-full" class="menu-name"></p>
+          <p id="user-role" class="small muted"></p>
+          <button id="theme" class="control menu-item" type="button">☾ Dark mode</button>
+          <button id="sign-out" class="control menu-item" type="button">Sign out</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div id="replay-banner" class="banner" hidden></div>
+  <div id="error-banner" class="banner error" hidden></div>
+
+  <main class="layout">
+    <section class="centre" aria-label="Overview and map">
+      <div class="kpis" id="kpis">
+        <article class="kpi" id="kpi-heatwaves"><h2>Heat waves</h2><p class="value">—</p><p class="sub">Loading…</p></article>
+        <article class="kpi" id="kpi-hottest"><h2>Hottest now</h2><p class="value">—</p><p class="sub">Loading…</p></article>
+        <article class="kpi" id="kpi-feels"><h2>Feels like (max)</h2><p class="value">—</p><p class="sub">Loading…</p></article>
+        <article class="kpi" id="kpi-people"><h2>People exposed</h2><p class="value">—</p><p class="sub">Loading…</p></article>
+        <article class="kpi" id="kpi-alerts"><h2>Alerts</h2><p class="value">—</p><p class="sub">Loading…</p></article>
+      </div>
+
+      <div class="card map-card">
+        <div class="map-head">
+          <h2 class="map-title">Tamil Nadu • Heat Risk Map</h2>
+          <div class="segmented" role="group" aria-label="Map layer">
+            <button type="button" data-layer="temperature" aria-pressed="true">Temperature</button>
+            <button type="button" data-layer="risk" aria-pressed="false">Today's risk</button>
+          </div>
+          <label class="visually-hidden" for="district-select">District</label>
+          <select id="district-select" class="control"></select>
+        </div>
+        <div class="map-body">
+          <div id="map" aria-label="Map of Tamil Nadu districts, coloured by heat"></div>
+          <div class="legend" id="legend" aria-hidden="true"></div>
+        </div>
+        <p class="hint">Hover a district for a quick look · click it for details</p>
+      </div>
+    </section>
+
+    <aside class="detail" id="detail" aria-live="polite" aria-label="District details">
+      <p class="muted">Pick a district on the map to see its details.</p>
+    </aside>
+
+    <aside class="lists" aria-label="Alerts and priority districts">
+      <div class="card">
+        <div class="card-head"><h2>Heat alerts</h2></div>
+        <div id="alerts" class="rows"><p class="muted">Loading…</p></div>
+        <details class="info"><summary>How alerts work</summary>
+          <p>We use IMD's heat-wave rules: how far the day's maximum is above the usual for that date.</p>
+          <p><b>Watch</b> – a heat wave showed up in one forecast.<br>
+             <b>Warning</b> – it is still there hours later and another forecast model agrees. Officers are then messaged once.</p>
+        </details>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2 id="priority-title">Priority districts</h2></div>
+        <p id="priority-note" class="muted small" hidden>No heat wave expected – for awareness only, no action needed.</p>
+        <div id="priority" class="rows"><p class="muted">Loading…</p></div>
+        <details class="info"><summary>How districts are ranked</summary>
+          <p>Heat-wave colour first, then risk over the next 3 days, hours of very strong heat and response capacity.</p>
+        </details>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="status">
+    <span id="status-text">Forecast updates hourly</span>
+    <span class="dot">·</span>
+    <details class="about"><summary>ⓘ About the data</summary>
+      <ul>
+        <li>Weather: Open-Meteo (ECMWF, GFS, ICON and other national models)</li>
+        <li>'Feels like' = UTCI – sun, humidity, wind and heat from the ground</li>
+        <li>Heat waves = IMD rules</li>
+        <li>Population = Census 2011 (Census 2027 will replace it)</li>
+        <li id="about-alerts">Text alerts not set up – saved to the log</li>
+      </ul>
+    </details>
+  </footer>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

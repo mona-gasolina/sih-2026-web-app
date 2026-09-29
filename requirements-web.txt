@@ -1,0 +1,5 @@
+# Web API + dashboard only (api.py) – for hosting. No PyQt5: the desktop app is not run on a server.
+pythermalcomfort>=2.10
+fastapi>=0.115
+uvicorn>=0.30
+apscheduler>=3.10,<4

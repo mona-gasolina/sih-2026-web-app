@@ -41,7 +41,10 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 
-from config import ALERT_STATE_FILE, ALERT_LOG_FILE, DATA_DIR, ENSEMBLE_MIN_AGREE
+from config import (
+    ALERT_STATE_FILE, ALERT_LOG_FILE, DATA_DIR, ENSEMBLE_MIN_AGREE, atomic_write_text, file_lock,
+    band_label,
+)
 from heatwave import code_index
 
 CONFIRM_UPDATES = 2
@@ -59,13 +62,24 @@ def _load_state():
 
 def _save_state(state):
     try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        ALERT_STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        atomic_write_text(ALERT_STATE_FILE, json.dumps(state, indent=2))
     except Exception:
         pass
 
 
 def evaluate(zone_metrics, weather_info):
+    """Update WATCH/WARNING for every district (see _evaluate).
+
+    The desktop app and the web API may both run this at the same moment. The
+    lock makes read-decide-save one step, so the second one sees "already sent"
+    and a warning goes out exactly once."""
+    if weather_info.get("source", "").startswith("Open-Meteo"):
+        with file_lock(ALERT_STATE_FILE):
+            return _evaluate(zone_metrics, weather_info)
+    return _evaluate(zone_metrics, weather_info)
+
+
+def _evaluate(zone_metrics, weather_info):
     """
     zone_metrics: {district: metrics dict with "forecast" list}
     weather_info: {"source", "fetched_at", "fresh"}
@@ -160,9 +174,21 @@ def _should_send(entry, code, now):
 HIGH_STRESS_BANDS = ("HIGH", "EXTREME")
 
 
-def suggested_actions(m):
-    """Warning level from the IMD heat-wave code; day-to-day advice from UTCI stress."""
+def suggested_actions(m, alert=None):
+    """
+    Warning level from the IMD heat-wave code; day-to-day advice from UTCI stress.
+    alert: this district's entry from evaluate(). An ORANGE / RED heat wave gets
+    the full Heat Action Plan only once it is a confirmed WARNING; while it is a
+    WATCH (one forecast update, or the other models disagree) officers prepare.
+    """
     code = m.get("imd", {}).get("code", "GREEN")
+    if code in ("RED", "ORANGE") and (alert or {}).get("level") != "WARNING":
+        return [
+            "Heat wave forecast but not yet confirmed: get the Heat Action Plan ready.",
+            "Prepare cooling centres and drinking-water points.",
+            "Ask employers of outdoor workers to plan shade and rest breaks.",
+            "Check again after the next forecast update.",
+        ]
     if code in ("RED", "ORANGE"):
         return [
             "Activate the Heat Action Plan for this area.",
@@ -208,7 +234,7 @@ def compose_message(alert, actions):
         above = f", {dep:.0f}°C above normal" if dep is not None and dep > 0 else ""
         what = f"{colour.lower()} alert from {alert['day']}. Up to {alert['tmax']:.0f}°C{above}"
     else:
-        what = f"{alert['risk'].lower()} heat stress {alert['day'].lower()}"
+        what = f"{band_label(alert['risk']).lower()} {alert['day'].lower()}"
     heading = "HEAT WARNING UPDATE" if alert.get("upgrade") else f"HEAT {alert['level']}"
     return (f"{heading}, {alert['district']}: {what}; feels like {alert['stress']:.0f}°C in the sun. "
             f"{first_action} – Heat Intelligence")
@@ -267,23 +293,28 @@ LOG_COLUMNS = ["timestamp", "district", "level", "code", "heat_from", "recipient
 def _log(alert, body, results):
     """timestamp = when the alert was logged; heat_from = first forecast heat-wave day."""
     try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        if ALERT_LOG_FILE.exists():
-            with open(ALERT_LOG_FILE, "r", encoding="utf-8") as f:
-                header = f.readline().strip().split(",")
-            if header != LOG_COLUMNS:          # older format: keep it, start a fresh log
-                ALERT_LOG_FILE.replace(ALERT_LOG_FILE.with_name("alert_log_old.csv"))
-        new = not ALERT_LOG_FILE.exists()
-        with open(ALERT_LOG_FILE, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            if new:
-                writer.writerow(LOG_COLUMNS)
-            for label, channel, status in results:
-                writer.writerow([datetime.now().isoformat(timespec="seconds"), alert["district"],
-                                 alert["level"], alert.get("colour", ""), alert.get("day", ""),
-                                 label, channel, status, body])
+        with file_lock(ALERT_LOG_FILE):
+            _append_log(alert, body, results)
     except Exception:
         pass
+
+
+def _append_log(alert, body, results):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if ALERT_LOG_FILE.exists():
+        with open(ALERT_LOG_FILE, "r", encoding="utf-8") as f:
+            header = f.readline().strip().split(",")
+        if header != LOG_COLUMNS:          # older format: keep it, start a fresh log
+            ALERT_LOG_FILE.replace(ALERT_LOG_FILE.with_name("alert_log_old.csv"))
+    new = not ALERT_LOG_FILE.exists()
+    with open(ALERT_LOG_FILE, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if new:
+            writer.writerow(LOG_COLUMNS)
+        for label, channel, status in results:
+            writer.writerow([datetime.now().isoformat(timespec="seconds"), alert["district"],
+                             alert["level"], alert.get("colour", ""), alert.get("day", ""),
+                             label, channel, status, body])
 
 
 def read_log(limit=50):

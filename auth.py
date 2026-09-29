@@ -1,11 +1,14 @@
 import hashlib
 import json
+import os
 import re
 import secrets
 import time
 from datetime import datetime
 
-from config import USERS_FILE, DATA_DIR
+from functools import wraps
+
+from config import USERS_FILE, DATA_DIR, atomic_write_text, file_lock
 
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_SECONDS = 60
@@ -56,6 +59,15 @@ def normalise_mobile(mobile):
     return mobile
 
 
+def _locked(method):
+    """users.json is shared with the web API: read, change and save it as one step."""
+    @wraps(method)
+    def wrapper(*args, **kwargs):
+        with file_lock(USERS_FILE):
+            return method(*args, **kwargs)
+    return wrapper
+
+
 class AuthManager:
     """
     Prototype local role-based authentication.
@@ -68,10 +80,13 @@ class AuthManager:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         self._ensure_store()
 
+    @_locked
     def _ensure_store(self):
         if USERS_FILE.exists():
             return
-        salt, digest = _hash_password("Admin@123")
+        # A hosted copy sets HEAT_ADMIN_PASSWORD so the public site never has the
+        # prototype password; on a desktop it stays Admin@123 (see README).
+        salt, digest = _hash_password(os.environ.get("HEAT_ADMIN_PASSWORD") or "Admin@123")
         self._write({"users": [{
             "username": "admin",
             "full_name": "System Administrator",
@@ -90,7 +105,7 @@ class AuthManager:
         return json.loads(USERS_FILE.read_text(encoding="utf-8"))
 
     def _write(self, data):
-        USERS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        atomic_write_text(USERS_FILE, json.dumps(data, indent=2))
 
     def _find(self, data, username):
         for user in data["users"]:
@@ -99,6 +114,7 @@ class AuthManager:
         return None
 
     # ---------------------------------------------------------------- login
+    @_locked
     def authenticate(self, username, password, role):
         """Returns (user or None, error message)."""
         generic = "Sign-in failed. Check the access type, login ID and password."
@@ -141,6 +157,7 @@ class AuthManager:
         return self.authenticate(username, password, role)[0]
 
     # ------------------------------------------------------------- accounts
+    @_locked
     def create_city_admin(self, username, password, city, full_name="", designation="",
                           district="", mobile=""):
         username = username.strip()
@@ -175,6 +192,7 @@ class AuthManager:
         })
         self._write(data)
 
+    @_locked
     def set_active(self, username, active):
         data = self._read()
         user = self._find(data, username)
@@ -185,6 +203,7 @@ class AuthManager:
         user["active"] = bool(active)
         self._write(data)
 
+    @_locked
     def reset_password(self, username, new_password):
         problems = password_problems(new_password)
         if problems:

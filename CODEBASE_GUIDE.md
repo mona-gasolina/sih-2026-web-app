@@ -181,16 +181,21 @@ That's `combined_thermal_score()`. The card that says
 
 ### 5.4 Risk band
 
-| Thermal score | Band | Same heat in UTCI words |
-|---|---|---|
-| under 25 | VERY LOW | no heat stress |
-| 25 – 49 | LOW | moderate |
-| 50 – 74 | MODERATE | strong |
-| 75 – 91 | HIGH | very strong |
-| 92 and above | EXTREME | extreme, or very strong most of the day |
+| Thermal score | Band (in code) | Shown on screen | Same heat in UTCI words |
+|---|---|---|---|
+| under 25 | VERY LOW | Comfortable | no heat stress |
+| 25 – 49 | LOW | Warm | moderate |
+| 50 – 74 | MODERATE | Hot | strong |
+| 75 – 91 | HIGH | Very hot | very strong |
+| 92 and above | EXTREME | Dangerous in sun | extreme, or very strong most of the day |
 
 The bands match the UTCI categories so the screen never says "extreme" next to
 "very strong heat stress". A normal hot afternoon is HIGH.
+
+The screen shows plain words (`BAND_LABELS` / `BAND_ADVICE` in `config.py`,
+sent to the web app by `/ui/config`) instead of the codes. A band says how hot
+it is for someone outdoors, not whether the day is unusual, so the alarm words
+("warning", "heat wave") are left to the IMD heat-wave alerts.
 
 ### 5.5 Relative risk (heat + people)
 
@@ -311,28 +316,39 @@ return JSON. Any program – a React website, a phone app, another government
 system – can ask it for the heat data without running the desktop app.
 
 ```bash
-python api.py          # then open http://127.0.0.1:8000/docs
+python api.py          # web dashboard: http://127.0.0.1:8000/app/   docs: /docs
 ```
 
 `/docs` is an automatic page listing every endpoint, with a "Try it out" button.
+The web dashboard (`web/index.html`, `style.css`, `app.js`, Leaflet map) is served
+by the same program at `/app/` and reads the endpoints below.
 
-| Endpoint | Returns |
-|---|---|
-| `GET /districts` | All districts, most urgent first |
-| `GET /districts/{name}` | One district: now, 5-day forecast, IMD code, alert, actions |
-| `GET /alerts` | Current WATCH / WARNING list |
-| `GET /alerts/log` | Sent/logged alerts (needs `X-API-Key` if `HEAT_API_KEY` is set) |
-| `POST /refresh` | Download fresh weather now (same key rule) |
-| `GET /replays` | Past heat waves; add `?replay=2024-04-30` to the calls above |
-| `GET /geojson` | District boundaries for a web map |
-| `GET /health` | Is it running, when was it last computed |
+**Who can call what.** The web dashboard signs in with the desktop accounts
+(`POST /auth/login` → an HttpOnly, SameSite=strict session cookie for 8 hours; sessions
+live in memory, so restarting the API signs everyone out). Other systems send the
+`X-API-Key` header instead (set `HEAT_API_KEY`).
+
+| Endpoint | Returns | Access |
+|---|---|---|
+| `POST /auth/login`, `/auth/logout`, `GET /auth/me` | Sign in / out, who am I | – |
+| `GET /districts` | All districts, most urgent first | signed in or key |
+| `GET /districts/{name}` | One district: now, 5-day forecast, IMD code, alert, actions | signed in or key |
+| `GET /alerts` | Current WATCH / WARNING list | signed in or key |
+| `GET /alerts/log` | Sent/logged alerts (contains officer names) | System Admin or key |
+| `POST /refresh` | Download fresh weather now | signed in or key |
+| `GET /replays` | Past heat waves; add `?replay=2024-04-30` to the calls above | public |
+| `GET /geojson` | District boundaries for a web map | public |
+| `GET /ui/config` | The desktop app's colours and scales, for the web map | public |
+| `GET /health` | Is it running, when was it last computed | public |
 
 - **APScheduler** runs `refresh_live()` straight away and then every hour:
   recompute, update WATCH/WARNING, send newly confirmed warnings.
 - It uses `service.compute_all()`, the same function the desktop app uses, so
   both always agree.
-- Run the desktop app **or** the API as the alerting service, not both: they
-  share `data/alert_state.json`.
+- The desktop app and the API **can run at the same time**. They share
+  `data/alert_state.json`, `users.json` and the weather cache; `config.file_lock()`
+  lets only one of them read-decide-save at a time, and `atomic_write_text()` swaps
+  files in whole, so a warning is sent exactly once and nobody reads a half-written file.
 
 ---
 

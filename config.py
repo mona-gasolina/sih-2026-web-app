@@ -1,7 +1,16 @@
+from contextlib import contextmanager
 from pathlib import Path
 import colorsys
 import json
+import os
 import re
+import threading
+import time
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 APP_TITLE = "HEAT INTELLIGENCE"
 APP_SHORT = "Heat Intelligence"
@@ -201,6 +210,45 @@ RISK_GRADIENT_STOPS = [
 
 RISK_ORDER = ["VERY LOW", "LOW", "MODERATE", "HIGH", "EXTREME"]
 
+# What people read for each band. The codes above stay the same inside the
+# code; the screen says what the heat means for someone outdoors, so the
+# alarm words ("warning", "heat wave") are left to the IMD alerts alone.
+BAND_LABELS = {
+    "VERY LOW": "Comfortable",
+    "LOW": "Warm",
+    "MODERATE": "Hot",
+    "HIGH": "Very hot",
+    "EXTREME": "Dangerous in sun",
+}
+BAND_ADVICE = {
+    "VERY LOW": "No heat stress.",
+    "LOW": "Drink water if you are out for long.",
+    "MODERATE": "Take breaks in the shade.",
+    "HIGH": "Limit time in the sun.",
+    "EXTREME": "Avoid direct sun around midday.",
+}
+
+
+def band_label(band):
+    """Plain-language name of a risk band (anything else is shown as given)."""
+    return BAND_LABELS.get(band, band)
+
+
+# The same plain words for the "feels like" category of a single hour
+# (thermal.stress_category: UTCI names, or heat-index names as a fallback).
+STRESS_LABELS = {
+    "Extreme heat stress": "Dangerous in sun", "Very strong heat stress": "Very hot",
+    "Strong heat stress": "Hot", "Moderate heat stress": "Warm", "No thermal stress": "Comfortable",
+    "Slight cold stress": "Cool", "Moderate cold stress": "Cold", "Strong cold stress": "Very cold",
+    "Very strong cold stress": "Very cold", "Extreme cold stress": "Very cold",
+    "Extreme danger": "Dangerous in sun", "Danger": "Very hot", "Extreme caution": "Hot",
+    "Caution": "Warm", "No heat concern": "Comfortable",
+}
+
+
+def stress_label(category):
+    return STRESS_LABELS.get(category, category)
+
 
 # ---------------------------------------------------------------------------
 # Colour helpers
@@ -329,6 +377,68 @@ _font_scale = 1.0      # the user's text-size choice (the "100%" button)
 _screen_fit = 1.0      # automatic factor for the current screen size
 
 
+# ---------------------------------------------------------------------------
+# Files shared by the desktop app and the web API
+# ---------------------------------------------------------------------------
+# Both programs can run at once and read-modify-write the same files
+# (alert state, users, caches). file_lock() lets only one of them in at a time,
+# across programs and threads; atomic_write_text() means a reader never sees a
+# half-written file.
+@contextmanager
+def file_lock(path, timeout=30.0):
+    """Hold an exclusive lock on `<path>.lock` for the duration of the block."""
+    lock_path = Path(str(path) + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(lock_path, "a+b")
+    locked = False
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                if os.name == "nt":
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except OSError:
+                if time.monotonic() > deadline:
+                    break       # a stuck program must not stop warnings: carry on without it
+                time.sleep(0.05)
+        yield locked
+    finally:
+        if locked:
+            try:
+                if os.name == "nt":
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        handle.close()
+
+
+def atomic_write_text(path, text):
+    """Write to a temporary file, then swap it in, so readers see old or new – never half."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        for _ in range(40):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:     # Windows: another program is reading it this instant
+                time.sleep(0.05)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
 def _read_settings():
     try:
         return json.loads(UI_SETTINGS_FILE.read_text(encoding="utf-8"))
@@ -340,8 +450,7 @@ def _write_settings(**changes):
     try:
         data = _read_settings()
         data.update(changes)
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        UI_SETTINGS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        atomic_write_text(UI_SETTINGS_FILE, json.dumps(data, indent=2))
     except Exception:
         pass
 

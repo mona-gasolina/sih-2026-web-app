@@ -19,6 +19,7 @@ import urllib.request
 from datetime import datetime, timedelta
 
 from config import (
+    atomic_write_text,
     OPEN_METEO_URL, WEATHER_TIMEOUT, WEATHER_CACHE_FILE, WEATHER_CACHE_MINUTES,
     FORECAST_DAYS, DATA_DIR, NORMALS_FILE, NORMALS_URL, NORMALS_YEARS, NORMALS_SMOOTH_DAYS,
     ENSEMBLE_MODELS, MODEL_BIAS_FILE, MODEL_BIAS_START,
@@ -154,13 +155,12 @@ def load_cache(names, max_age_minutes=WEATHER_CACHE_MINUTES):
 
 def save_cache(payloads):
     try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        WEATHER_CACHE_FILE.write_text(json.dumps({
+        atomic_write_text(WEATHER_CACHE_FILE, json.dumps({
             "fetched_at": time.time(),
             "version": CACHE_VERSION,
             "names": list(payloads.keys()),
             "payloads": payloads,
-        }), encoding="utf-8")
+        }))
     except Exception:
         pass
 
@@ -232,9 +232,8 @@ def get_replay_weather(locations, start, days=FORECAST_DAYS):
         payloads = {name: payload for name, payload in zip(names, data)}
         _attach_models(payloads, locations, {"start_date": start, "end_date": end}, base_url=NORMALS_URL)
         try:
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({"start": start, "version": CACHE_VERSION, "names": names,
-                                        "payloads": payloads}), encoding="utf-8")
+            atomic_write_text(path, json.dumps({"start": start, "version": CACHE_VERSION, "names": names,
+                                                "payloads": payloads}))
         except Exception:
             pass
         return {n: _replay_normalize(p) for n, p in payloads.items()}, info
@@ -307,12 +306,11 @@ def get_tmax_normals(locations):
             series = _build_normals(payload.get("daily", {}))
             if series:
                 normals[name] = series
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        NORMALS_FILE.write_text(json.dumps({
+        atomic_write_text(NORMALS_FILE, json.dumps({
             "source": f"Open-Meteo historical forecast API, daily max temperature {first}-{last}, "
                       f"day-of-year mean smoothed ±{NORMALS_SMOOTH_DAYS} days",
             "normals": normals,
-        }), encoding="utf-8")
+        }))
     except Exception:
         pass
     return normals
@@ -365,12 +363,11 @@ def get_model_bias(locations):
                 if series:
                     per_model[model] = series
             bias[name] = per_model
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        MODEL_BIAS_FILE.write_text(json.dumps({
+        atomic_write_text(MODEL_BIAS_FILE, json.dumps({
             "source": f"Open-Meteo historical forecast API, daily Tmax {MODEL_BIAS_START} to {end}: "
                       f"model minus best_match, day-of-year mean ±{BIAS_WINDOW_DAYS} days",
             "bias": bias,
-        }), encoding="utf-8")
+        }))
     except Exception:
         pass
     return bias

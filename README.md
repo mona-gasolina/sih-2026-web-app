@@ -187,18 +187,27 @@ python main.py
 
 On first launch, the app downloads the Tamil Nadu GeoJSON if it is not already present.
 
-### Web API (FastAPI)
+### Web dashboard and API (FastAPI)
 
 ```bash
 python api.py
 ```
 
-Then open http://127.0.0.1:8000/docs for the interactive API documentation.
+Then open **http://127.0.0.1:8000/app/** for the web dashboard – the same map, tiles,
+alerts and district details as the desktop app, in any browser, including phones.
+Sign in with the same accounts as the desktop app (System Admin, or a City Administrator
+created with Manage Access); a City Administrator starts on their own district. Sessions
+last 8 hours. The interactive API documentation is at http://127.0.0.1:8000/docs.
+
+The district and alert data need a signed-in user; other systems use the API key instead
+(set `HEAT_API_KEY` and send it as the `X-API-Key` header). The alert log, which contains
+officer names, is for the System Admin or the API key only.
+To open it from another device on the same Wi-Fi, start it with `HEAT_API_HOST=0.0.0.0`
+and use this computer's IP address instead of 127.0.0.1.
 The API serves the same numbers as the desktop app as JSON (`/districts`,
 `/districts/{name}`, `/alerts`, `/geojson`, …), recomputes every hour with
 APScheduler and sends confirmed warnings via Twilio, as in the idea submission.
-Add `?replay=2024-04-30` to see the 2024 heat wave. Set `HEAT_API_KEY` to protect
-`/alerts/log` and `/refresh`. Details: CODEBASE_GUIDE §8b.
+Add `?replay=2024-04-30` to see the 2024 heat wave. Details: CODEBASE_GUIDE §8b.
 
 ### Prototype admin login
 
@@ -207,6 +216,23 @@ Add `?replay=2024-04-30` to see the 2024 heat wave. Set `HEAT_API_KEY` to protec
 - Password: `Admin@123`
 
 After logging in as System Admin, use **Manage Access** to create City Administrator accounts.
+
+### Hosting (free, on Render)
+
+The web dashboard and API run as one service (`render.yaml`, `requirements-web.txt`).
+
+1. On [render.com](https://render.com), sign in with GitHub → **New → Blueprint** → pick this repo.
+2. When asked, enter a strong `HEAT_ADMIN_PASSWORD` – the hosted `admin` account uses it
+   instead of `Admin@123`.
+3. The site opens at `https://<service-name>.onrender.com` (it goes straight to the dashboard).
+4. Free services sleep after ~15 min without visitors, which would pause the hourly
+   forecast check. A free uptime monitor (UptimeRobot, cron-job.org) that opens
+   `https://<service-name>.onrender.com/health` every 10 minutes keeps it awake.
+
+Limits of the free plan: no permanent disk, so accounts created in **Manage Access**,
+the alert log and WATCH/WARNING confirmation reset when the service restarts or is
+redeployed (the `admin` account is re-created). Fine for demos; for real use move
+`data/users.json` and the alert state to a database or a paid disk.
 
 ## Project structure
 
@@ -221,7 +247,8 @@ After logging in as System Admin, use **Manage Access** to create City Administr
 - `pipeline.py` — turns weather + Census into per-district metrics (runs in background thread)
 - `alerts.py` — persistent alerting, suggested actions, SMS/WhatsApp dispatch, alert log
 - `service.py` — one recompute for all districts, shared by the app and the API
-- `api.py` — FastAPI web API with hourly APScheduler job
+- `api.py` — FastAPI web API with hourly APScheduler job; also serves the web dashboard
+- `web/` — web dashboard (HTML/CSS/JS + Leaflet), served at `/app/` by `api.py`
 - `ui_controls.py` — text size, light/dark toggle, password eye field
 - `weather.py` — batched hourly Open-Meteo requests with 1-hour cache, Tmax normals, replay
 - `data_manager.py` — GeoJSON and Census data loading
@@ -253,9 +280,9 @@ and districts formed after 2011 have no Census 2011 population of their own.
   A state selector would load these per state.
 - **Cold waves** for northern states (IMD cold-wave criteria on Tmin), reusing the same
   persistence and alert flow.
-- **Web dashboard** on the stack in the idea submission: the FastAPI backend (`api.py`)
-  exists; next are a React + Leaflet frontend on top of it and PostgreSQL/PostGIS in
-  place of the local JSON/CSV files.
+- **Web dashboard**: a Leaflet web dashboard now runs on the FastAPI backend (`web/`).
+  Next are logins and officer actions on the web, and PostgreSQL/PostGIS in place of
+  the local JSON/CSV files.
 
 ## Data sources and rationale
 
@@ -272,8 +299,8 @@ The project PDF specifies:
 - ward-level GIS mapping
 
 This prototype implements the backend part of that stack (FastAPI, pythermalcomfort,
-APScheduler, Twilio, GeoJSON) and uses a PyQt desktop
-dashboard in place of the React/Leaflet frontend. Local files stand in for PostgreSQL.
+APScheduler, Twilio, GeoJSON), a Leaflet web dashboard (plain JavaScript rather than
+React) and a PyQt desktop dashboard. Local files stand in for PostgreSQL.
 
 ### Weather data – what Open-Meteo is
 
