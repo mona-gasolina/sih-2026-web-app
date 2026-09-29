@@ -13,6 +13,7 @@ Weather data: Open-Meteo (free, no API key).
 """
 import json
 import math
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -162,10 +163,10 @@ def load_cache(names, max_age_minutes=WEATHER_CACHE_MINUTES):
     return cache
 
 
-def save_cache(payloads):
+def save_cache(payloads, fetched_at=None):
     try:
         atomic_write_text(WEATHER_CACHE_FILE, json.dumps({
-            "fetched_at": time.time(),
+            "fetched_at": fetched_at or time.time(),
             "version": CACHE_VERSION,
             "names": list(payloads.keys()),
             "payloads": payloads,
@@ -193,6 +194,31 @@ def _fetch_with_retry(locations):
             time.sleep(wait)
 
 
+# Hosted server settings (render.yaml):
+#   HEAT_WEATHER_URL   forecast published hourly by GitHub Actions (relay_weather.py), read
+#                      before calling Open-Meteo – shared hosting runs out of its free daily limit
+#   HEAT_SAMPLE_DATA=0 without real weather show nothing rather than sample numbers
+RELAY_URL = os.environ.get("HEAT_WEATHER_URL")
+RELAY_MAX_AGE_MINUTES = 180
+SAMPLE_DATA = os.environ.get("HEAT_SAMPLE_DATA", "1") != "0"
+
+
+def _from_relay(names):
+    """The GitHub-published forecast if it is complete and recent, else None."""
+    try:
+        request = urllib.request.Request(RELAY_URL, headers={"User-Agent": "HeatIntelligencePrototype/0.3"})
+        with urllib.request.urlopen(request, timeout=WEATHER_TIMEOUT) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        print(f"GitHub weather copy not available: {exc!r}", flush=True)
+        return None
+    age = (time.time() - data.get("fetched_at", 0)) / 60.0
+    if age > RELAY_MAX_AGE_MINUTES or data.get("version") != CACHE_VERSION             or sorted(data.get("names", [])) != sorted(names):
+        print(f"GitHub weather copy not used (age {age:.0f} min, version {data.get('version')})", flush=True)
+        return None
+    return data
+
+
 def get_weather(locations, force=False, replay=None):
     """
     Returns (normalised {name: data}, info dict).
@@ -207,6 +233,13 @@ def get_weather(locations, force=False, replay=None):
         if cache:
             return ({n: normalize(p) for n, p in cache["payloads"].items()},
                     {"source": "Open-Meteo (cached)", "fetched_at": cache["fetched_at"], "fresh": False, "error": ""})
+    if RELAY_URL:
+        relay = _from_relay(names)
+        if relay:
+            save_cache(relay["payloads"], relay["fetched_at"])
+            return ({n: normalize(p) for n, p in relay["payloads"].items()},
+                    {"source": "Open-Meteo (via GitHub)", "fetched_at": relay["fetched_at"],
+                     "fresh": True, "error": ""})
     try:
         payloads = _fetch_with_retry(locations)
         save_cache(payloads)
@@ -220,6 +253,8 @@ def get_weather(locations, force=False, replay=None):
             return ({n: normalize(p) for n, p in cache["payloads"].items()},
                     {"source": "Open-Meteo (offline cache)", "fetched_at": cache["fetched_at"],
                      "fresh": False, "error": str(exc)})
+        if not SAMPLE_DATA:
+            return {}, {"source": "UNAVAILABLE", "fetched_at": time.time(), "fresh": False, "error": str(exc)}
         return ({n: demo_weather(i) for i, n in enumerate(names)},
                 {"source": "DEMO", "fetched_at": time.time(), "fresh": False, "error": str(exc)})
 

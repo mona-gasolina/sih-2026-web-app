@@ -16,6 +16,10 @@ services:
         value: "3.12.8"
       - key: TZ                       # dates ("Today", alert times) in Indian time
         value: Asia/Kolkata
+      - key: HEAT_WEATHER_URL         # hourly forecast from GitHub Actions (relay_weather.py)
+        value: https://raw.githubusercontent.com/mona-gasolina/sih-2026-web-app/weather-data/weather.json
+      - key: HEAT_SAMPLE_DATA         # never show sample numbers on the public site
+        value: "0"
       - key: HEAT_API_HOST
         value: 0.0.0.0
       - key: HEAT_TRUST_PROXY

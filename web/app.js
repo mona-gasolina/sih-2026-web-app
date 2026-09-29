@@ -227,9 +227,12 @@ async function loadData({ quiet = false } = {}) {
     renderAll(districts);
   } catch (error) {
     if (error.status === 401) return;    // sessionEnded() already showed the sign-in page
-    if (error.status === 503) {          // server still downloading the first forecast
-      $("#updated").textContent = "The server is getting the forecast…";
-      setTimeout(() => loadData({ quiet: true }), 5000);
+    if (error.status === 503) {          // first forecast still downloading, or no weather at all
+      const loading = /loading/i.test(error.message);
+      $("#updated").textContent = loading ? "The server is getting the forecast…" : "Live weather unavailable";
+      $("#error-banner").textContent = error.message;
+      $("#error-banner").hidden = loading;
+      setTimeout(() => loadData({ quiet: true }), loading ? 5000 : 30000);
       return;
     }
     $("#error-banner").textContent = `Could not load the heat data: ${error.message}. Is the API running (python api.py)?`;

@@ -138,7 +138,8 @@ def current(replay=None):
         with _lock:
             snap = _snapshots[None]
     if not snap["results"]:
-        raise HTTPException(503, snap["info"].get("error") or "No weather data available.")
+        raise HTTPException(503, "Live weather is unavailable right now – the server keeps retrying. "
+                                 "No sample numbers are shown.", headers={"Retry-After": "60"})
     return snap
 
 
