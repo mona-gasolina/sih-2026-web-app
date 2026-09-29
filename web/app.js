@@ -158,7 +158,11 @@ async function buildMap() {
   new ResizeObserver(() => { state.map.invalidateSize(); fitMap(); }).observe($("#map"));
 }
 function fitMap() {
-  if (state.geoLayer) state.map.fitBounds(state.geoLayer.getBounds(), { padding: [10, 10] });
+  // While the dashboard is hidden (sign-in page) the map is 0×0; fitting then leaves
+  // Leaflet with no valid zoom and a blank map after the next sign-in.
+  const box = $("#map");
+  if (!state.geoLayer || !box.clientWidth || !box.clientHeight) return;
+  state.map.fitBounds(state.geoLayer.getBounds(), { padding: [10, 10] });
 }
 
 function tooltipHtml(name) {
@@ -606,6 +610,7 @@ async function startDashboard(user) {
     await buildMap();
   } else {
     state.map.invalidateSize();
+    fitMap();
   }
   state.selected = null;                   // start on this user's own district
   await loadData();

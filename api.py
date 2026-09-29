@@ -273,6 +273,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def revalidate_dashboard(request: Request, call_next):
+    """Browsers re-check the dashboard files on every load (a cheap 304 when unchanged),
+    so a fix goes live for everyone right after a deploy instead of when their cache expires."""
+    response = await call_next(request)
+    if request.url.path.startswith("/app"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 REPLAY_QUERY = Query(default=None, description="Replay start date from GET /replays; omit for live data")
 
 
