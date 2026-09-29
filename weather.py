@@ -14,6 +14,7 @@ Weather data: Open-Meteo (free, no API key).
 import json
 import math
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
@@ -36,8 +37,16 @@ CACHE_VERSION = 2          # bump when HOURLY_VARS changes, so old caches are re
 def _request(params, base_url=OPEN_METEO_URL, timeout=WEATHER_TIMEOUT):
     url = f"{base_url}?{urllib.parse.urlencode(params)}"
     request = urllib.request.Request(url, headers={"User-Agent": "HeatIntelligencePrototype/0.3"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # Open-Meteo explains refusals in the body, e.g. which usage limit was hit.
+        try:
+            reason = json.loads(exc.read().decode("utf-8")).get("reason", "")
+        except Exception:
+            reason = ""
+        raise RuntimeError(f"HTTP {exc.code} {exc.reason}" + (f": {reason}" if reason else "")) from exc
 
 
 def fetch_batch(locations, days=FORECAST_DAYS):
@@ -165,6 +174,25 @@ def save_cache(payloads):
         pass
 
 
+RATE_LIMIT_WAITS = (30, 60)       # seconds before each retry after "429 Too Many Requests"
+
+
+def _fetch_with_retry(locations):
+    """
+    fetch_batch, retried when Open-Meteo says too many requests. On shared hosting
+    other apps use the same internet address, so its per-minute limit can be hit
+    by traffic that is not ours; a short wait usually clears it.
+    """
+    for wait in (*RATE_LIMIT_WAITS, None):
+        try:
+            return fetch_batch(locations)
+        except RuntimeError as exc:
+            if wait is None or not str(exc).startswith("HTTP 429"):
+                raise
+            print(f"Weather download refused ({exc}); retrying in {wait} s", flush=True)
+            time.sleep(wait)
+
+
 def get_weather(locations, force=False, replay=None):
     """
     Returns (normalised {name: data}, info dict).
@@ -180,7 +208,7 @@ def get_weather(locations, force=False, replay=None):
             return ({n: normalize(p) for n, p in cache["payloads"].items()},
                     {"source": "Open-Meteo (cached)", "fetched_at": cache["fetched_at"], "fresh": False, "error": ""})
     try:
-        payloads = fetch_batch(locations)
+        payloads = _fetch_with_retry(locations)
         save_cache(payloads)
         return ({n: normalize(p) for n, p in payloads.items()},
                 {"source": "Open-Meteo", "fetched_at": time.time(), "fresh": True, "error": ""})

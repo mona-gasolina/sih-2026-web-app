@@ -59,6 +59,7 @@ WEB_DIR = BASE_DIR / "web"
 REPLAYS = dict(REPLAY_EVENTS)
 FIRST_LOAD_WAIT_SECONDS = 60
 RETRY_MINUTES = 2              # a failed update is retried this soon, not after an hour
+OFFLINE_RETRY_MINUTES = 10     # no fresh weather (saved copy or sample data): try again this soon
 
 _lock = threading.Lock()
 _ready = threading.Event()
@@ -85,9 +86,13 @@ def refresh_live(force=False):
         _refresh_live(force)
     except Exception as exc:            # e.g. the weather service briefly unreachable
         print(f"Forecast update failed ({exc!r}); retrying in {RETRY_MINUTES} min", flush=True)
-        if _scheduler is not None:
-            _scheduler.add_job(refresh_live, "date", id="refresh_retry", replace_existing=True,
-                               run_date=datetime.now(timezone.utc) + timedelta(minutes=RETRY_MINUTES))
+        _retry_in(RETRY_MINUTES)
+
+
+def _retry_in(minutes):
+    if _scheduler is not None:
+        _scheduler.add_job(refresh_live, "date", id="refresh_retry", replace_existing=True,
+                           run_date=datetime.now(timezone.utc) + timedelta(minutes=minutes))
 
 
 def _refresh_live(force=False):
@@ -102,6 +107,9 @@ def _refresh_live(force=False):
     with _lock:
         _snapshots[None] = _snapshot(results, info, alert_list)
     _ready.set()
+    if info.get("error"):               # download failed: showing a saved copy or sample data
+        print(f"No fresh weather ({info['error']}); retrying in {OFFLINE_RETRY_MINUTES} min", flush=True)
+        _retry_in(OFFLINE_RETRY_MINUTES)
 
 
 def _load_replay(start):
