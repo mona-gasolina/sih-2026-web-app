@@ -120,13 +120,15 @@ function chip(text, band) {
 }
 
 // ------------------------------------------------------------------ theme
+const SUN_ICON = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg>`;
+const MOON_ICON = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>`;
 function applyTheme(name) {
   state.theme = name;
   document.documentElement.dataset.theme = name;
   const tokens = state.config?.themes?.[name] || {};
   for (const [key, value] of Object.entries(tokens)) document.documentElement.style.setProperty(`--${key}`, value);
-  $("#theme").textContent = name === "dark" ? "☀  Light mode" : "☾  Dark mode";
-  $("#login-theme").textContent = name === "dark" ? "☀" : "☾";
+  $("#theme").setAttribute("aria-checked", String(name === "dark"));     // a switch: shows the current mode
+  $("#login-theme").innerHTML = name === "dark" ? SUN_ICON : MOON_ICON;   // drawn, not font symbols
   $("#login-theme").title = name === "dark" ? "Switch to light mode" : "Switch to dark mode";
   if (state.geoLayer) paintMap();
 }
@@ -486,6 +488,15 @@ function wireControls() {
   document.addEventListener("click", (e) => { if (!e.target.closest(".menu")) toggleMenu(false); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleMenu(false); });
   $("#sign-out").addEventListener("click", signOut);
+  $("#open-log").addEventListener("click", () => { toggleMenu(false); openAlertLog(); });
+  $("#log-close").addEventListener("click", () => $("#log-dialog").close());
+  $("#log-rows").addEventListener("click", (e) => {
+    const row = e.target.closest("tr[data-i]");
+    if (!row) return;
+    $("#log-rows").querySelectorAll("tr").forEach((r) => r.setAttribute("aria-selected", String(r === row)));
+    $("#log-message").textContent = `Message: ${state.logRows[row.dataset.i].message || "(none saved)"}`;
+  });
+  $("#log-rows").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.closest("tr[data-i]")?.click(); });
   wireLogin();
   document.querySelectorAll(".segmented button").forEach((button) => button.addEventListener("click", () => {
     state.layer = button.dataset.layer;
@@ -592,6 +603,36 @@ function wireLogin() {
   });
 }
 
+// ------------------------------------------------------------------ alert log (System Admin)
+function logTime(stamp) {
+  const when = new Date(stamp);
+  return isNaN(when) ? stamp || "" : when.toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+}
+
+async function openAlertLog() {
+  const channels = state.config.alert_gateway || [];
+  $("#log-sub").textContent = channels.length ? `Alerts go out by ${channels.join(" and ")}.`
+    : "Text messages aren't set up yet, so alerts are saved here instead of being sent.";
+  $("#log-rows").innerHTML = `<tr><td colspan="7" class="muted">Loading…</td></tr>`;
+  $("#log-message").textContent = "";
+  $("#log-dialog").showModal();
+  try {
+    state.logRows = await getJSON("/alerts/log?limit=200");
+  } catch (error) {
+    if (error.status === 401) { $("#log-dialog").close(); return; }
+    $("#log-rows").innerHTML = `<tr><td colspan="7">Could not load the log: ${esc(error.message)}</td></tr>`;
+    return;
+  }
+  const rows = state.logRows;
+  $("#log-rows").innerHTML = rows.length ? rows.map((r, i) => `<tr data-i="${i}" tabindex="0">
+      <td>${esc(logTime(r.timestamp))}</td><td>${esc(r.district)}</td><td>${esc(titleCase(r.level))}</td>
+      <td>${r.code ? chip(titleCase(r.code), r.code) : ""}</td><td>${esc(r.heat_from)}</td>
+      <td>${esc(r.recipient)}</td><td>${esc(r.status)}</td></tr>`).join("")
+    : `<tr><td colspan="7" class="muted">No alerts yet – nothing has been confirmed as a warning.</td></tr>`;
+  $("#log-message").textContent = rows.length ? "Click a row to see the message that was sent." : "";
+}
+
 async function signOut() {
   toggleMenu(false);
   try { await getJSON("/auth/logout", { method: "POST" }); } catch { /* already signed out */ }
@@ -605,6 +646,7 @@ async function startDashboard(user) {
   $("#user-name").textContent = user.full_name || user.username;
   $("#user-full").textContent = user.full_name || user.username;
   $("#user-role").textContent = `${role} • ${where}`;
+  $("#open-log").hidden = user.role !== "admin";          // officer names: System Admin only
   $("#login").hidden = true;
   $("#app").hidden = false;
   if (!state.mapBuilt) {

@@ -15,7 +15,7 @@
 <body>
   <!-- Sign in: the same accounts as the desktop app -->
   <section id="login" class="login" hidden aria-labelledby="login-title">
-    <button id="login-theme" class="control icon login-theme" type="button" aria-label="Switch light / dark mode">☾</button>
+    <button id="login-theme" class="control icon login-theme" type="button" aria-label="Switch light / dark mode"></button>
     <form id="login-form" class="login-card" novalidate>
       <div class="login-brand">
         <h1 id="login-title">HEAT INTELLIGENCE</h1>
@@ -60,7 +60,9 @@
         <div id="user-menu" class="menu-panel" hidden>
           <p id="user-full" class="menu-name"></p>
           <p id="user-role" class="small muted"></p>
-          <button id="theme" class="control menu-item" type="button">☾ Dark mode</button>
+          <button id="open-log" class="control menu-item" type="button" hidden>Alert log</button>
+          <button id="theme" class="control menu-item theme-switch" type="button" role="switch" aria-checked="false">
+            <span>Dark mode</span><span class="switch" aria-hidden="true"></span></button>
           <button id="sign-out" class="control menu-item" type="button">Sign out</button>
         </div>
       </div>
@@ -139,6 +141,17 @@
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <dialog id="log-dialog" class="log-dialog" aria-labelledby="log-title">
+    <div class="log-head">
+      <div><h2 id="log-title">Alert log</h2><p id="log-sub" class="small muted"></p></div>
+      <button id="log-close" class="control" type="button">Close</button>
+    </div>
+    <div class="log-table-wrap"><table class="log-table">
+      <thead><tr><th>Logged</th><th>District</th><th>Alert</th><th>Colour</th><th>Heat expected from</th><th>Sent to</th><th>Status</th></tr></thead>
+      <tbody id="log-rows"></tbody>
+    </table></div>
+    <p id="log-message" class="log-message small"></p>
+  </dialog>
   <script src="app.js"></script>
 </body>
 </html>
