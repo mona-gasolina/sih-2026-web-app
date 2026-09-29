@@ -34,7 +34,7 @@ import secrets
 import threading
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -58,11 +58,13 @@ API_KEY = os.environ.get("HEAT_API_KEY")
 WEB_DIR = BASE_DIR / "web"
 REPLAYS = dict(REPLAY_EVENTS)
 FIRST_LOAD_WAIT_SECONDS = 60
+RETRY_MINUTES = 2              # a failed update is retried this soon, not after an hour
 
 _lock = threading.Lock()
 _ready = threading.Event()
 _snapshots = {}          # None (live) or replay start date → snapshot dict
 _areas = None
+_scheduler = None
 
 
 def _get_areas():
@@ -79,6 +81,16 @@ def _snapshot(results, info, alert_list):
 
 def refresh_live(force=False):
     """Scheduler job: recompute, update WATCH/WARNING, send newly confirmed warnings."""
+    try:
+        _refresh_live(force)
+    except Exception as exc:            # e.g. the weather service briefly unreachable
+        print(f"Forecast update failed ({exc!r}); retrying in {RETRY_MINUTES} min", flush=True)
+        if _scheduler is not None:
+            _scheduler.add_job(refresh_live, "date", id="refresh_retry", replace_existing=True,
+                               run_date=datetime.now(timezone.utc) + timedelta(minutes=RETRY_MINUTES))
+
+
+def _refresh_live(force=False):
     locations, demographics, capacities = _get_areas()
     results, info = compute_all(locations, demographics, capacities, force=force)
     alert_list, newly_confirmed = alert_engine.evaluate(results, info)
@@ -232,10 +244,14 @@ def _source(snap):
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(_app):
-    scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
+    global _scheduler
+    _scheduler = scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
     # First run straight away, then every hour (the PDF's "refresh every hour").
+    # The start time carries its time zone: a plain datetime.now() on a server
+    # running in UTC would be read as IST, 5.5 h in the past, and skipped as missed.
     scheduler.add_job(refresh_live, "interval", minutes=WEATHER_CACHE_MINUTES,
-                      next_run_time=datetime.now(), id="refresh_live", max_instances=1, coalesce=True)
+                      next_run_time=datetime.now(timezone.utc), id="refresh_live",
+                      max_instances=1, coalesce=True)
     scheduler.start()
     yield
     scheduler.shutdown(wait=False)

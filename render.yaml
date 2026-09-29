@@ -14,6 +14,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.8"
+      - key: TZ                       # dates ("Today", alert times) in Indian time
+        value: Asia/Kolkata
       - key: HEAT_API_HOST
         value: 0.0.0.0
       - key: HEAT_TRUST_PROXY

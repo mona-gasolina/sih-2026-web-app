@@ -214,6 +214,7 @@ Add `?replay=2024-04-30` to see the 2024 heat wave. Details: CODEBASE_GUIDE §8b
 - Access type: System Admin
 - Login ID: `admin`
 - Password: `Admin@123`
+- On the hosted site the password is the `HEAT_ADMIN_PASSWORD` set on Render, not `Admin@123`.
 
 After logging in as System Admin, use **Manage Access** to create City Administrator accounts.
 
