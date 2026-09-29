@@ -505,10 +505,10 @@ function wireControls() {
     try {
       await getJSON("/refresh", { method: "POST" });
     } catch (error) {
-      $("#error-banner").textContent = error.status === 401
-        ? "Refreshing needs the API key (HEAT_API_KEY). The forecast still updates by itself every hour."
-        : `Refresh failed: ${error.message}`;
-      $("#error-banner").hidden = false;
+      if (error.status !== 401) {           // 401: session ended, the sign-in page is already shown
+        $("#error-banner").textContent = `Refresh failed: ${error.message}`;
+        $("#error-banner").hidden = false;
+      }
     }
     button.disabled = false;
     loadData({ quiet: true });

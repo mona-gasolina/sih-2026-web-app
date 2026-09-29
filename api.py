@@ -29,6 +29,10 @@ The desktop app and the API can run at the same time on the same data folder:
 they share data/alert_state.json and users.json through a file lock
 (config.file_lock), so each WARNING is still sent exactly once.
 """
+import base64
+import hashlib
+import hmac
+import json
 import os
 import secrets
 import threading
@@ -148,8 +152,10 @@ def current(replay=None):
 # ---------------------------------------------------------------------------
 SESSION_COOKIE = "heat_session"
 SESSION_SECONDS = 8 * 3600
-_sessions = {}                 # token → {"user": public user fields, "expires": epoch seconds}
-_sessions_lock = threading.Lock()
+# Sessions are signed cookies, not a list in memory, so a server restart (every deploy, and
+# Render's free plan restarts now and then) does not sign everyone out. HEAT_SESSION_SECRET
+# keeps the key the same across restarts; without it a new key is made at each start.
+_SESSION_KEY = (os.environ.get("HEAT_SESSION_SECRET") or "").encode() or secrets.token_bytes(32)
 _auth_lock = threading.Lock()  # AuthManager rewrites users.json (failed attempts, last login)
 PUBLIC_USER_FIELDS = ("username", "full_name", "designation", "role", "city", "district")
 
@@ -160,16 +166,32 @@ class LoginRequest(BaseModel):
     role: str = Field(pattern="^(admin|city_admin)$", description="admin or city_admin")
 
 
+def _b64(raw):
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def _unb64(text):
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def _session_token(user):
+    body = _b64(json.dumps({"user": user, "expires": time.time() + SESSION_SECONDS}).encode())
+    return f"{body}.{_b64(hmac.new(_SESSION_KEY, body.encode(), hashlib.sha256).digest())}"
+
+
 def _session_user(request):
-    token = request.cookies.get(SESSION_COOKIE)
-    if not token:
+    token = request.cookies.get(SESSION_COOKIE) or ""
+    body, _, signature = token.partition(".")
+    if not body or not signature:
         return None
-    with _sessions_lock:
-        session = _sessions.get(token)
-        if session and session["expires"] > time.time():
-            return session["user"]
-        _sessions.pop(token, None)
-    return None
+    expected = _b64(hmac.new(_SESSION_KEY, body.encode(), hashlib.sha256).digest())
+    if not hmac.compare_digest(signature, expected):
+        return None
+    try:
+        session = json.loads(_unb64(body))
+    except ValueError:
+        return None
+    return session["user"] if session.get("expires", 0) > time.time() else None
 
 
 def _key_ok(x_api_key):
@@ -311,23 +333,13 @@ def login(body: LoginRequest, request: Request, response: Response):
     if not user:
         raise HTTPException(401, message)
     public = {k: user.get(k, "") for k in PUBLIC_USER_FIELDS}
-    token = secrets.token_urlsafe(32)
-    now = time.time()
-    with _sessions_lock:
-        for old in [t for t, sess in _sessions.items() if sess["expires"] <= now]:
-            del _sessions[old]
-        _sessions[token] = {"user": public, "expires": now + SESSION_SECONDS}
-    response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_SECONDS, httponly=True,
+    response.set_cookie(SESSION_COOKIE, _session_token(public), max_age=SESSION_SECONDS, httponly=True,
                         samesite="strict", secure=request.url.scheme == "https", path="/")
     return public
 
 
 @app.post("/auth/logout", tags=["auth"])
-def logout(request: Request, response: Response):
-    token = request.cookies.get(SESSION_COOKIE)
-    if token:
-        with _sessions_lock:
-            _sessions.pop(token, None)
+def logout(response: Response):
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"ok": True}
 

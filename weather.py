@@ -188,7 +188,8 @@ def _fetch_with_retry(locations):
         try:
             return fetch_batch(locations)
         except RuntimeError as exc:
-            if wait is None or not str(exc).startswith("HTTP 429"):
+            # Only the per-minute limit clears within a minute; a daily limit does not.
+            if wait is None or not str(exc).startswith("HTTP 429") or "Minutely" not in str(exc):
                 raise
             print(f"Weather download refused ({exc}); retrying in {wait} s", flush=True)
             time.sleep(wait)
